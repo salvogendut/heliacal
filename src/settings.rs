@@ -63,6 +63,7 @@ pub struct Settings {
     pub prom: String,
     pub cgsix_rom: String,
     pub scsi: [ScsiTarget; SCSI_TARGETS],
+    pub disk_read_only: bool,
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
@@ -84,6 +85,7 @@ impl Default for Settings {
                 },
                 path: String::new(),
             }),
+            disk_read_only: false,
             smoothing: false,
             scanlines: false,
             show_status: true,
@@ -191,11 +193,25 @@ impl Settings {
             }
             fs::File::open(path).map_err(|e| format!("{label}: {path}: {e}"))?;
         }
+        if !self.disk_read_only {
+            for (id, target) in resolved.scsi.iter().enumerate() {
+                if target.kind == TargetKind::Disk && !target.path.is_empty() {
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&target.path)
+                        .map_err(|e| format!("SCSI {id} Hard disk: {}: {e}", target.path))?;
+                }
+            }
+        }
         Ok(())
     }
 
     pub fn hardware_eq(&self, other: &Self) -> bool {
-        self.prom == other.prom && self.cgsix_rom == other.cgsix_rom && self.scsi == other.scsi
+        self.prom == other.prom
+            && self.cgsix_rom == other.cgsix_rom
+            && self.scsi == other.scsi
+            && self.disk_read_only == other.disk_read_only
     }
 
     // Paths in a config are relative to that config, not the launch directory.
@@ -277,6 +293,14 @@ pub fn default_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disk_access_defaults_to_read_write_and_roundtrips_read_only() {
+        assert!(!Settings::default().disk_read_only);
+        let missing: Settings = toml::from_str("ram_mib = 128").unwrap();
+        assert!(!missing.disk_read_only);
+        let read_only: Settings = toml::from_str("disk_read_only = true").unwrap();
+        assert!(read_only.disk_read_only);
+    }
     #[test]
     fn unsupported_hardware_is_rejected() {
         assert!(toml::from_str::<Settings>("model = 'ultra5'").is_err());

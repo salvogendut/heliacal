@@ -34,14 +34,16 @@ Host repeat is ignored. A bounded 256-transition queue retains events when the
 core keyboard FIFO applies backpressure. On overflow, focus loss, pause,
 opening the overlay, or releasing capture, pending input is discarded and
 held guest stations are released. Releases themselves retry core backpressure.
-Host mouse events navigate the frontend and capture the keyboard; no guest
-mouse packets are synthesized.
+Host mouse events navigate the frontend until capture. While captured, relative
+motion and left/middle/right buttons are queued as Sun Mouse Systems packets on
+SCC channel B; focus loss and capture release send button releases.
 
 `settings.rs` serializes a strict TOML schema, validates the sole machine and
-RAM size, and validates configured image sizes/readability on save. Empty
-firmware paths are valid for an unconfigured desktop; Boot reports what's
-missing. Paths are resolved relative to the config directory. Saving uses a
-synced temporary file in the destination directory and an atomic rename.
+RAM size, and validates configured image sizes/readability and read/write
+disk access on save. Empty firmware paths are valid for an unconfigured
+desktop; Boot reports what's missing. Paths are resolved relative to the config
+directory. Saving uses a synced temporary file in the destination directory and
+an atomic rename.
 An OS file lock prevents two instances sharing a config/NVRAM file.
 
 Normal shutdown saves NVRAM on the worker. If saving fails, the window stays
@@ -49,9 +51,10 @@ open, the machine remains available, and a running guest is paused for retry.
 The worker is joined on application exit; an abnormal UI exit also attempts
 to save NVRAM. This is firmware-state persistence, not a guest RAM snapshot.
 
-No disk image is created or modified. The frontend uses `ScsiBus::attach`,
-which opens raw media read-only; it does not call the core's writable attach
-API. A fixed seven-element target array maps index to SCSI ID 0–6; ID 7 stays
+The frontend does not create or truncate disk images. Populated hard-disk
+targets use `ScsiBus::attach_disk_rw` by default and `ScsiBus::attach` when the
+Advanced read-only option is selected. CD-ROM targets always use `attach`.
+A fixed seven-element target array maps index to SCSI ID 0–6; ID 7 stays
 reserved. Each target independently selects disconnected/disk/CD-ROM and an
 image. Empty paths attach nothing; disconnected targets retain their saved
 paths without opening them. Settings validation uses the selected device's

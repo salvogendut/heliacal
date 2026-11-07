@@ -55,22 +55,24 @@ Use **Delete** to detach and clear a target. Multiple disks and CDs may be
 attached simultaneously. Changes take effect on the next confirmed cold reset.
 
 Targets default to empty, with hard disk/CD-ROM types preselected at IDs 3/6.
+Hard disks use read/write access by default; CDs never use writable access.
 Selecting an image for a disconnected target initially chooses hard disk;
 use Space to change it to CD-ROM as needed. Cycling a target to disconnected
 retains its path for later use. Saving checks the block size and readability
-of each connected image.
+of each connected image, plus write access for read/write hard disks.
 
 Optional `--disk disk.raw` selects ID 3; `--cdrom install.iso` selects ID 6.
 These shortcuts leave other targets unchanged. Images must contain whole
-512-byte disk blocks or 2048-byte CD sectors. All attachments are **read-only**,
-including when the linked core supports disk writes.
+512-byte disk blocks or 2048-byte CD sectors. Hard disks default to **read/write**
+so installed systems can update their file systems; CD-ROM images remain
+read-only. Select **Advanced > Disk access** to make all hard disks read-only.
 
 ## Controls
 
 | Key / action | Effect |
 | --- | --- |
 | Ctrl+P | Boot, pause, or resume |
-| Click guest display / Ctrl+Enter | Capture / toggle keyboard capture |
+| Click guest display / Ctrl+Enter | Capture / toggle keyboard and mouse capture |
 | Pause + A | Sun Stop-A; F13 can also serve as Stop |
 | F4 | Save the guest framebuffer as a native-resolution PPM in the working directory |
 | F5 | Confirm a cold reset using the saved machine settings |
@@ -90,13 +92,15 @@ Cancel; use arrows and Enter, or click a choice.
 
 Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
 RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
-can be hidden. **General > Tinker** reveals Advanced, with the core PC, step
-count, and recent printable serial A output. Serial output is diagnostic text,
-not a terminal emulator.
+can be hidden. **Advanced** selects hard-disk read/write or read-only access.
+**General > Tinker** enables the Advanced diagnostics block with the core PC,
+step count, and recent printable serial A output. Serial output is diagnostic
+text, not a terminal emulator. Disk-access changes apply on the next cold reset.
 
 Settings remain a draft until **F9** validates and saves them successfully.
-Display changes then apply immediately. Firmware and media changes apply at
-the next **F5 cold reset**; saving them does not interrupt a running guest.
+Display changes then apply immediately. Firmware, media and disk-access changes
+apply at the next **F5 cold reset**; saving them does not interrupt a running
+guest.
 Choosing **Discard** closes the draft without changing the machine. Reset
 replaces guest RAM and retains NVRAM; shut down a guest OS before resetting or
 quitting.
@@ -124,24 +128,24 @@ firmware/disks under ignored `local/` if storing them in this repository.
 
 Fresh NVRAM lets OBP initialize its defaults. The initial checksum message is
 expected. The firmware performs its 128 MiB memory test and may automatically
-attempt network boot. After the memory test, capture the keyboard and use
+attempt network boot. After the memory test, capture input and use
 **Pause+A** to interrupt it. Helios documents its graphical `ok` prompt
 checkpoint; startup may take several minutes.
 
 ## Status and validation
 
 Implemented: real Helios execution on a worker thread, TurboGX presentation,
-Sun keyboard input, pause/resume, confirmed cold reset and quit, NVRAM
-persistence, firmware/media selection, settings drafts, display options,
-screenshots, and Tinker diagnostics. The included logo is used on the paused
-screen and as the window icon.
+Sun keyboard and mouse input, pause/resume, confirmed cold reset and quit, NVRAM
+persistence, firmware/media selection, writable/read-only disk access, settings
+drafts, display options, screenshots, and Tinker diagnostics. The included logo
+is used on the paused screen and as the window icon.
 
 Validated on Linux with SDL3's software/dummy driver: the original Sun PROM
 renders its SPARCstation 5 banner, reports **128 MB installed** and **Keyboard
 Present**, and starts its memory test. This frontend check establishes display
 integration; it does not establish OS boot or installation compatibility.
-Guest mouse, audio, writable disks, interactive serial, host networking,
-clipboard-to-guest paste, and additional models are not provided yet.
+Guest mouse is connected after capture; audio, interactive serial, host
+networking, clipboard-to-guest paste, and additional models are not provided yet.
 Native desktop file-picker behavior and non-Linux hosts need interactive
 validation. The existing Prismatic and Iris repositories are independent.
 

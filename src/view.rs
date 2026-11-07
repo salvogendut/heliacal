@@ -392,28 +392,38 @@ fn draw_overlay(
     }
     match o.tab {
         Tab::Advanced => {
-            text(
-                c,
-                144,
-                300,
-                &format!("Helios / PC {:08x} / {} steps", state.pc, state.steps),
-                BORDER,
-            )?;
-            text(
-                c,
-                144,
-                324,
-                "Serial A output (recent printable text):",
-                MUTED,
-            )?;
-            let lines: Vec<_> = state.serial.lines().rev().take(11).collect();
-            for (i, line) in lines.iter().rev().enumerate() {
+            if o.draft.tinker {
                 text(
                     c,
                     144,
-                    348 + i as i32 * 18,
-                    &line.chars().take(82).collect::<String>(),
-                    TEXT,
+                    300,
+                    &format!("Helios / PC {:08x} / {} steps", state.pc, state.steps),
+                    BORDER,
+                )?;
+                text(
+                    c,
+                    144,
+                    324,
+                    "Serial A output (recent printable text):",
+                    MUTED,
+                )?;
+                let lines: Vec<_> = state.serial.lines().rev().take(11).collect();
+                for (i, line) in lines.iter().rev().enumerate() {
+                    text(
+                        c,
+                        144,
+                        348 + i as i32 * 18,
+                        &line.chars().take(82).collect::<String>(),
+                        TEXT,
+                    )?;
+                }
+            } else {
+                text(
+                    c,
+                    144,
+                    300,
+                    "Diagnostics are hidden. Enable Tinker in General.",
+                    MUTED,
                 )?;
             }
         }
@@ -424,7 +434,7 @@ fn draw_overlay(
                 "Sun SPARCstation 5 / sun4m / SPARC V8 / 128 MiB RAM.",
                 "Interface conventions follow Prismatic and the Happy Years family.",
                 "Sun Type 5 US keyboard: Pause + A sends Stop-A.",
-                "Guest mouse, audio and host networking are not connected.",
+                "Guest mouse is connected after capture; audio and host networking are not.",
                 "Firmware and operating systems are not bundled.",
             ]
             .iter()
@@ -444,14 +454,14 @@ fn draw_overlay(
                 c,
                 144,
                 510,
-                "SCSI ID 7: host adapter (reserved). All images are read-only.",
+                "SCSI ID 7: host adapter (reserved). CD images are always read-only.",
                 MUTED,
             )?;
             text(
                 c,
                 144,
                 534,
-                "Click the device type or press Space to select disk / CD-ROM / off.",
+                "Set hard-disk access in Advanced; click the type or press Space to cycle.",
                 MUTED,
             )?;
         }
@@ -472,6 +482,8 @@ fn draw_overlay(
         572,
         if o.edit.is_some() {
             "Type path / Ctrl+V paste / Ctrl+U clear / Enter accept / Esc cancel"
+        } else if o.tab == Tab::Advanced {
+            "Arrows navigate / Enter toggles disk access"
         } else if o.tab == Tab::Media {
             "Space type / Enter choose image / Ctrl+E type path / Delete detach"
         } else {
@@ -483,7 +495,7 @@ fn draw_overlay(
         c,
         144,
         602,
-        "F9 Save   Esc Close   Firmware and media apply on next cold reset.",
+        "F9 Save   Esc Close   Firmware/media/access apply on next cold reset.",
         BORDER,
     )?;
     Ok(())

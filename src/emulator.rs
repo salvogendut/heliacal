@@ -1,4 +1,4 @@
-use crate::settings::{RAM_MIB, SCSI_TARGETS, Settings, atomic_write};
+use crate::settings::{RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write};
 use helios::{
     devices::{
         cgsix::{Cgsix, HEIGHT, WIDTH},
@@ -81,9 +81,17 @@ enum Command {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseEvent {
+    Motion(i32, i32),
+    Button(u8, bool),
+}
+
 #[derive(Default)]
 struct Input {
     queue: VecDeque<(u8, bool)>,
+    mouse: VecDeque<MouseEvent>,
+    mouse_buttons: u8,
     release: bool,
 }
 
@@ -149,7 +157,43 @@ impl Emulator {
     pub fn release_keys(&self) {
         let mut input = self.input.lock().unwrap();
         input.queue.clear();
+        input.mouse.clear();
+        for button in 0..3 {
+            if input.mouse_buttons & (1 << (2 - button)) != 0 {
+                input.mouse.push_back(MouseEvent::Button(button, false));
+            }
+        }
+        input.mouse_buttons = 0;
         input.release = true;
+    }
+
+    pub fn mouse_motion(&self, dx: f32, dy: f32) {
+        let dx = dx.round() as i32;
+        let dy = dy.round() as i32;
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        let mut input = self.input.lock().unwrap();
+        if input.mouse.len() < 256 {
+            input.mouse.push_back(MouseEvent::Motion(dx, dy));
+        }
+    }
+
+    pub fn mouse_button(&self, button: u8, down: bool) {
+        if button > 2 {
+            return;
+        }
+        let mut input = self.input.lock().unwrap();
+        let mask = 1 << (2 - button);
+        let old = input.mouse_buttons;
+        input.mouse_buttons = if down {
+            input.mouse_buttons | mask
+        } else {
+            input.mouse_buttons & !mask
+        };
+        if input.mouse_buttons != old && input.mouse.len() < 256 {
+            input.mouse.push_back(MouseEvent::Button(button, down));
+        }
     }
 }
 
@@ -196,10 +240,17 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         if let Some(kind) = target.kind.media_kind()
             && !target.path.is_empty()
         {
-            devices
-                .scsi
-                .attach(id as u8, kind, &target.path)
-                .map_err(|e| format!("SCSI {id}: {}: {e}", target.path))?;
+            if target.kind == TargetKind::Disk && !settings.disk_read_only {
+                devices
+                    .scsi
+                    .attach_disk_rw(id as u8, &target.path)
+                    .map_err(|e| format!("SCSI {id}: {}: {e}", target.path))?;
+            } else {
+                devices
+                    .scsi
+                    .attach(id as u8, kind, &target.path)
+                    .map_err(|e| format!("SCSI {id}: {}: {e}", target.path))?;
+            }
         }
     }
     Ok(machine)
@@ -303,6 +354,8 @@ fn run(
                             releases.clear();
                             let mut keys = input.lock().unwrap();
                             keys.queue.clear();
+                            keys.mouse.clear();
+                            keys.mouse_buttons = 0;
                             keys.release = false;
                         }
                         Err(error) => {
@@ -346,6 +399,12 @@ fn run(
                         releases.pop_front();
                     } else {
                         keys.queue.pop_front();
+                    }
+                }
+                while let Some(event) = keys.mouse.pop_front() {
+                    match event {
+                        MouseEvent::Motion(dx, dy) => m.mouse_motion(dx, dy),
+                        MouseEvent::Button(button, down) => m.mouse_button(button, down),
                     }
                 }
             }
@@ -396,7 +455,7 @@ fn run(
 mod tests {
     use super::*;
     #[test]
-    fn all_seven_scsi_ids_attach_the_selected_read_only_device_kind() {
+    fn all_seven_scsi_ids_honor_the_selected_access_mode() {
         use crate::settings::{ScsiTarget, TargetKind};
         let dir = tempfile::tempdir().unwrap();
         let prom = dir.path().join("prom");
@@ -436,10 +495,19 @@ mod tests {
                 helios::devices::scsi::MediaKind::Cdrom
             };
             assert_eq!(target.kind(), expected);
-            assert!(!target.writable());
+            assert_eq!(
+                target.writable(),
+                expected == helios::devices::scsi::MediaKind::Disk
+            );
             assert_eq!(target.blocks(), 1);
         }
         assert!(bus.target(7).is_none());
+        settings.disk_read_only = true;
+        let read_only = build(&settings, Nvram::default()).unwrap();
+        for id in 0..7 {
+            let target = read_only.bus.devices().unwrap().scsi.target(id).unwrap();
+            assert!(!target.writable());
+        }
         settings.scsi[0].kind = TargetKind::Disconnected;
         settings.scsi[0].path = "missing.raw".into();
         let replacement = build(&settings, Nvram::default()).unwrap();

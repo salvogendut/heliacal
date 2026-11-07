@@ -16,7 +16,8 @@
   closing; Discard has no runtime effects. Explain when a saved change takes
   effect and confirm operations that discard guest RAM.
 - Preserve user firmware and media. Current frontend attachments are
-  read-only. Keep firmware and disk images under ignored local/; use temporary
+  read/write by default, with an Advanced read-only option; CDs remain read-only.
+  Keep firmware and disk images under ignored local/; use temporary
   configurations and NVRAM in smoke tests.
 - Keep README status accurate. A rendered firmware banner does not establish
   an OS boot or installation. Do not claim placeholder controls implement

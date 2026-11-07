@@ -79,7 +79,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5 / microSPARC-II 85 MHz / 128 MiB RAM / TurboGX.\nStarts paused. Supply your own firmware. Media is read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard; Ctrl+Enter releases it.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5 / microSPARC-II 85 MHz / 128 MiB RAM / TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -146,7 +146,7 @@ impl App {
                 self.settings = o.draft.clone();
                 self.overlay = None;
                 self.notify(if changed {
-                    "Settings saved. Firmware/media apply on the next cold reset (F5)."
+                    "Settings saved. Firmware, media and disk access apply on the next cold reset (F5)."
                 } else {
                     "Settings saved."
                 });
@@ -542,12 +542,25 @@ fn run(options: Options) -> Result<()> {
                         edit.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
                     }
                 }
+                Event::MouseMotion { xrel, yrel, .. } if app.captured => {
+                    app.emulator.mouse_motion(xrel, -yrel);
+                }
+                Event::MouseButtonDown { mouse_btn, .. } if app.captured => {
+                    if let Some(button) = pointer_button(mouse_btn) {
+                        app.emulator.mouse_button(button, true);
+                    }
+                }
+                Event::MouseButtonUp { mouse_btn, .. } if app.captured => {
+                    if let Some(button) = pointer_button(mouse_btn) {
+                        app.emulator.mouse_button(button, false);
+                    }
+                }
                 Event::MouseButtonDown {
                     mouse_btn: sdl3::mouse::MouseButton::Left,
                     x,
                     y,
                     ..
-                } if app.picker.is_none() && !app.quitting => {
+                } if app.picker.is_none() && !app.quitting && !app.captured => {
                     let (x, y) = view::point(x, y, canvas.window().size());
                     if let Some((action, choice)) = app.confirm.as_mut() {
                         if let Some(index) = view::confirm_choice_at(x, y, action.choices().len()) {
@@ -618,6 +631,8 @@ fn run(options: Options) -> Result<()> {
             }
         }
         canvas.window_mut().set_keyboard_grab(app.captured);
+        sdl.mouse()
+            .set_relative_mouse_mode(canvas.window(), app.captured);
         let state = app.emulator.snapshot();
         let mut events = 0;
         if state.phase == Phase::Running && state.steps > last_steps {
@@ -779,6 +794,15 @@ fn run(options: Options) -> Result<()> {
         std::thread::sleep(Duration::from_millis(16).saturating_sub(frame_started.elapsed()));
     }
 }
+fn pointer_button(button: sdl3::mouse::MouseButton) -> Option<u8> {
+    match button {
+        sdl3::mouse::MouseButton::Left => Some(0),
+        sdl3::mouse::MouseButton::Middle => Some(1),
+        sdl3::mouse::MouseButton::Right => Some(2),
+        _ => None,
+    }
+}
+
 fn main() {
     let result = Options::parse().and_then(|options| options.map_or(Ok(()), run));
     if let Err(error) = result {

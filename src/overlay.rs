@@ -25,6 +25,7 @@ pub enum Field {
     Prom,
     Rom,
     Scsi(usize),
+    DiskAccess,
     Smoothing,
     Scanlines,
     Status,
@@ -56,12 +57,13 @@ impl Overlay {
         }
     }
     pub fn tabs(&self) -> Vec<Tab> {
-        let mut tabs = vec![Tab::General, Tab::Display, Tab::Media];
-        if self.draft.tinker {
-            tabs.push(Tab::Advanced);
-        }
-        tabs.push(Tab::About);
-        tabs
+        vec![
+            Tab::General,
+            Tab::Display,
+            Tab::Media,
+            Tab::Advanced,
+            Tab::About,
+        ]
     }
     pub fn rows(&self) -> Vec<Row> {
         match self.tab {
@@ -110,7 +112,16 @@ impl Overlay {
                 )
             })
             .collect(),
-            Tab::Advanced | Tab::About => vec![],
+            Tab::Advanced => vec![(
+                "Disk access",
+                if self.draft.disk_read_only {
+                    "Read-only".into()
+                } else {
+                    "Read/write".into()
+                },
+                Field::DiskAccess,
+            )],
+            Tab::About => vec![],
         }
         .into_iter()
         .map(|(label, value, field)| Row {
@@ -158,6 +169,7 @@ impl Overlay {
     }
     pub fn activate(&mut self) {
         match self.field() {
+            Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
             Field::Scanlines => self.draft.scanlines ^= true,
             Field::Status => self.draft.show_status ^= true,
@@ -252,7 +264,7 @@ mod tests {
         overlay.finish_edit();
         assert_eq!(overlay.draft.prom, "accepted.bin");
         assert!(settings.prom.is_empty());
-        assert!(!overlay.tabs().contains(&Tab::Advanced));
+        assert!(overlay.tabs().contains(&Tab::Advanced));
         overlay.draft.tinker = true;
         assert!(overlay.tabs().contains(&Tab::Advanced));
     }
@@ -280,6 +292,21 @@ mod tests {
         assert_eq!(Confirm::Unsaved.default_choice(), 2);
         assert_eq!(Confirm::Unsaved.choices(), ["Save", "Discard", "Cancel"]);
         assert_eq!(Confirm::Quit.default_choice(), 1);
+    }
+    #[test]
+    fn advanced_disk_access_toggles_the_draft_and_is_dirty() {
+        let settings = Settings::default();
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Advanced;
+        o.selected = 0;
+        assert_eq!(o.field(), Field::DiskAccess);
+        assert!(!o.draft.disk_read_only);
+        o.activate();
+        assert!(o.draft.disk_read_only);
+        assert!(o.dirty(&settings));
+        o.activate();
+        assert!(!o.draft.disk_read_only);
+        assert!(!o.dirty(&settings));
     }
     #[test]
     fn scsi_type_image_and_detach_only_change_the_selected_draft_target() {
