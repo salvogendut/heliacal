@@ -29,8 +29,11 @@ pub enum Field {
     Scanlines,
     Status,
     Tinker,
-    Save,
-    Discard,
+}
+impl Field {
+    pub fn is_path(self) -> bool {
+        matches!(self, Self::Prom | Self::Rom | Self::Scsi(_))
+    }
 }
 pub struct Row {
     pub label: &'static str,
@@ -61,7 +64,7 @@ impl Overlay {
         tabs
     }
     pub fn rows(&self) -> Vec<Row> {
-        let mut rows: Vec<Row> = match self.tab {
+        match self.tab {
             Tab::General => vec![
                 ("Machine", "Sun SPARCstation 5".into(), Field::Fixed),
                 ("Processor", "microSPARC-II / 85 MHz".into(), Field::Fixed),
@@ -115,31 +118,35 @@ impl Overlay {
             value,
             field,
         })
-        .collect();
-        rows.push(Row {
-            label: "Save settings",
-            value: "F9".into(),
-            field: Field::Save,
-        });
-        rows.push(Row {
-            label: "Discard changes",
-            value: "".into(),
-            field: Field::Discard,
-        });
-        rows
+        .collect()
     }
     pub fn field(&self) -> Field {
-        self.rows()[self.selected.min(self.rows().len() - 1)].field
+        self.rows()
+            .get(self.selected)
+            .map_or(Field::Fixed, |row| row.field)
     }
     pub fn move_row(&mut self, delta: isize) {
-        self.selected =
-            (self.selected as isize + delta).rem_euclid(self.rows().len() as isize) as usize;
+        let rows = self.rows().len();
+        if rows != 0 {
+            self.selected = (self.selected as isize + delta).rem_euclid(rows as isize) as usize;
+        }
+    }
+    pub fn dirty(&self, live: &Settings) -> bool {
+        self.draft != *live
     }
     pub fn switch_tab(&mut self, delta: isize) {
         let tabs = self.tabs();
         let index = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
         self.tab = tabs[(index as isize + delta).rem_euclid(tabs.len() as isize) as usize];
         self.selected = 0;
+    }
+    pub fn path(&self, field: Field) -> Option<&String> {
+        match field {
+            Field::Prom => Some(&self.draft.prom),
+            Field::Rom => Some(&self.draft.cgsix_rom),
+            Field::Scsi(id) => Some(&self.draft.scsi[id].path),
+            _ => None,
+        }
     }
     pub fn path_mut(&mut self, field: Field) -> Option<&mut String> {
         match field {
@@ -205,14 +212,26 @@ fn on_off(value: bool) -> String {
 pub enum Confirm {
     Quit,
     Reset,
-    Discard,
+    Unsaved,
 }
 impl Confirm {
     pub fn text(self) -> &'static str {
         match self {
             Self::Quit => "Quit Heliacal? NVRAM will be saved.",
             Self::Reset => "Cold reset with saved settings? Guest RAM will be lost.",
-            Self::Discard => "Discard the settings draft?",
+            Self::Unsaved => "Save changes before closing?",
+        }
+    }
+    pub fn choices(self) -> &'static [&'static str] {
+        match self {
+            Self::Quit | Self::Reset => &["Yes", "Cancel"],
+            Self::Unsaved => &["Save", "Discard", "Cancel"],
+        }
+    }
+    pub fn default_choice(self) -> usize {
+        match self {
+            Self::Unsaved => 2,
+            Self::Quit | Self::Reset => 1,
         }
     }
 }
@@ -236,6 +255,31 @@ mod tests {
         assert!(!overlay.tabs().contains(&Tab::Advanced));
         overlay.draft.tinker = true;
         assert!(overlay.tabs().contains(&Tab::Advanced));
+    }
+    #[test]
+    fn tabs_have_no_save_rows_and_empty_tabs_navigate_safely() {
+        let settings = Settings::default();
+        let mut overlay = Overlay::new(&settings);
+        for tab in overlay.tabs() {
+            overlay.tab = tab;
+            assert!(
+                overlay
+                    .rows()
+                    .iter()
+                    .all(|row| row.label != "Save settings" && row.label != "Discard changes")
+            );
+        }
+        overlay.tab = Tab::About;
+        overlay.selected = 0;
+        assert_eq!(overlay.field(), Field::Fixed);
+        overlay.move_row(1);
+        assert!(overlay.dirty(&Settings {
+            smoothing: true,
+            ..Settings::default()
+        }));
+        assert_eq!(Confirm::Unsaved.default_choice(), 2);
+        assert_eq!(Confirm::Unsaved.choices(), ["Save", "Discard", "Cancel"]);
+        assert_eq!(Confirm::Quit.default_choice(), 1);
     }
     #[test]
     fn scsi_type_image_and_detach_only_change_the_selected_draft_target() {

@@ -1,4 +1,4 @@
-use crate::settings::{RAM_MIB, Settings, atomic_write};
+use crate::settings::{RAM_MIB, SCSI_TARGETS, Settings, atomic_write};
 use helios::{
     devices::{
         cgsix::{Cgsix, HEIGHT, WIDTH},
@@ -55,6 +55,7 @@ pub struct Snapshot {
     pub error: Option<String>,
     pub has_machine: bool,
     pub shutdown_failed: bool,
+    pub scsi_activity: [(u64, u64); SCSI_TARGETS],
 }
 
 impl Default for Snapshot {
@@ -69,6 +70,7 @@ impl Default for Snapshot {
             error: None,
             has_machine: false,
             shutdown_failed: false,
+            scsi_activity: [(0, 0); SCSI_TARGETS],
         }
     }
 }
@@ -221,6 +223,15 @@ fn publish(machine: &Machine, state: &mut Snapshot, shared: &Mutex<Snapshot>) {
     state.pixels = Arc::new(rgba);
     state.frame += 1;
     state.pc = machine.cpu.pc();
+    state.scsi_activity = std::array::from_fn(|id| {
+        machine
+            .bus
+            .devices()
+            .unwrap()
+            .scsi
+            .target(id as u8)
+            .map_or((0, 0), |target| target.activity())
+    });
     *shared.lock().unwrap() = state.clone();
 }
 

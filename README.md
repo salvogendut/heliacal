@@ -5,7 +5,7 @@
 Heliacal is a native **Rust/SDL3 Happy Years frontend** for the sibling
 [Helios](../helios) Sun SPARC emulator. Its interface follows Prismatic and the
 Happy Years family: the guest display owns the window, **F9** opens options,
-and a compact status strip keeps the essential controls visible.
+and a status strip plus machine activity LEDs keep the essential state visible.
 
 The initial machine is fixed at **Sun SPARCstation 5 / sun4m**, with an
 **85 MHz microSPARC-II**, **128 MiB RAM**, **TurboGX (CGsix) graphics**, and a
@@ -49,7 +49,8 @@ You can also supply paths for this session:
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
 **Space** on a target, or click its type, to cycle the device type. Press
-**Enter** or click its image path to edit it; **Ctrl+B** opens the file picker.
+**Enter** or click its image path to open the system file picker (Ctrl+B does
+the same); **Ctrl+E** lets you type a path instead.
 Use **Delete** to detach and clear a target. Multiple disks and CDs may be
 attached simultaneously. Changes take effect on the next confirmed cold reset.
 
@@ -79,22 +80,26 @@ including when the linked core supports disk writes.
 | Shift + reserved function key | Pass the shifted function key to the guest while captured |
 
 In options, use **Left/Right** or **Tab/Shift+Tab** to switch sections,
-**Up/Down** to select a row, and **Enter** to edit or toggle it. Tabs and rows
-are clickable. For paths, **Ctrl+B** opens the native file picker; **Enter**
-opens text entry, **Ctrl+V** pastes, **Ctrl+U** clears, and **Delete** detaches
-the selected image when outside text entry. **Escape** cancels text entry or
-offers to discard a changed settings draft. Confirmation dialogs default to
+**Up/Down** to select a row, and **Enter** to choose a file or toggle it. Tabs
+and rows are clickable. For paths, **Enter** or **Ctrl+B** opens the native file picker
+with firmware or disk/CD filters; **Ctrl+E** opens text entry, **Ctrl+V**
+pastes, **Ctrl+U** clears, and **Delete** detaches the selected image when
+outside text entry. **Escape** cancels text entry; with a changed draft it
+offers **Save**, **Discard**, or **Cancel**. Confirmation dialogs default to
 Cancel; use arrows and Enter, or click a choice.
 
-Display offers smoothing, scanlines, and shortcut hints. **General > Tinker**
-reveals Advanced, with the core PC, step count, and recent printable serial A
-output. Serial output is diagnostic text, not a terminal emulator.
+Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
+RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
+can be hidden. **General > Tinker** reveals Advanced, with the core PC, step
+count, and recent printable serial A output. Serial output is diagnostic text,
+not a terminal emulator.
 
-Settings remain a draft until Save validates and writes them successfully.
+Settings remain a draft until **F9** validates and saves them successfully.
 Display changes then apply immediately. Firmware and media changes apply at
 the next **F5 cold reset**; saving them does not interrupt a running guest.
-Discard has no effect on the machine. Reset replaces guest RAM and retains
-NVRAM; shut down a guest OS before resetting or quitting.
+Choosing **Discard** closes the draft without changing the machine. Reset
+replaces guest RAM and retains NVRAM; shut down a guest OS before resetting or
+quitting.
 
 ## Configuration and state
 

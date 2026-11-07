@@ -1,4 +1,5 @@
 use crate::{
+    activity,
     emulator::{Phase, Snapshot},
     overlay::{Confirm, Field, Overlay, Tab},
     settings::Settings,
@@ -11,11 +12,16 @@ use sdl3::{
 
 pub const WIDTH: u32 = 960;
 pub const HEIGHT: u32 = 760;
+const LED_HEIGHT: u32 = 22;
+const HINT_HEIGHT: u32 = 16;
 const PANEL: Color = Color::RGB(25, 32, 52);
 const BORDER: Color = Color::RGB(137, 163, 203);
 const TEXT: Color = Color::RGB(240, 240, 240);
 const MUTED: Color = Color::RGB(166, 181, 205);
 const ACCENT: Color = Color::RGB(239, 181, 81);
+const STATUS: Color = Color::RGB(255, 64, 64);
+const CONFIRM_SLOT: i32 = 140;
+const CONFIRM_Y: i32 = 390;
 
 fn text(
     c: &mut WindowCanvas,
@@ -46,16 +52,21 @@ fn panel(c: &mut WindowCanvas, rect: Rect) -> Result<(), sdl3::Error> {
     c.set_draw_color(BORDER);
     c.draw_rect(rect)
 }
-pub fn guest_rect() -> Rect {
-    Rect::new(26, 0, 908, 710)
+pub fn guest_rect(show_status: bool) -> Rect {
+    let height = HEIGHT - LED_HEIGHT - if show_status { HINT_HEIGHT } else { 0 };
+    let scale = (WIDTH as f32 / 1152.0).min(height as f32 / 900.0);
+    let width = (1152.0 * scale) as u32;
+    let height = (900.0 * scale) as u32;
+    Rect::new(((WIDTH - width) / 2) as i32, 0, width, height)
 }
 
 pub struct Presentation<'a> {
     pub settings: &'a Settings,
     pub state: &'a Snapshot,
     pub overlay: Option<&'a Overlay>,
-    pub confirm: Option<(Confirm, bool)>,
+    pub confirm: Option<(Confirm, usize)>,
     pub captured: bool,
+    pub leds: u64,
     pub notice: Option<&'a str>,
     pub quitting: bool,
 }
@@ -69,11 +80,16 @@ pub fn draw(
     c.set_draw_color(Color::RGB(5, 8, 14));
     c.clear();
     c.set_blend_mode(BlendMode::Blend);
+    let destination = guest_rect(p.settings.show_status);
     if p.state.has_machine {
-        c.copy(guest, None, guest_rect())?;
+        c.copy(guest, None, destination)?;
         if p.settings.scanlines {
-            for y in (0..710).step_by(3) {
-                fill(c, Rect::new(26, y, 908, 1), Color::RGBA(0, 0, 0, 65))?;
+            for y in (destination.y()..destination.bottom()).step_by(3) {
+                fill(
+                    c,
+                    Rect::new(destination.x(), y, destination.width(), 1),
+                    Color::RGBA(0, 0, 0, 65),
+                )?;
             }
         }
     } else {
@@ -99,52 +115,12 @@ pub fn draw(
         )?;
         text(c, 352, 578, "Ctrl+P  Boot the workstation", MUTED)?;
     }
-    if p.settings.show_status {
-        text(
-            c,
-            24,
-            718,
-            "Ctrl+P Boot/pause   F4 Capture   F5 Reset   F9 Options   F11 Fullscreen   F12 Quit",
-            MUTED,
-        )?;
-    }
-    fill(c, Rect::new(0, 738, WIDTH, 22), PANEL)?;
-    fill(
-        c,
-        Rect::new(14, 745, 8, 8),
-        if p.state.phase == Phase::Running {
-            Color::RGB(100, 210, 130)
-        } else {
-            ACCENT
-        },
-    )?;
-    text(
-        c,
-        32,
-        746,
-        if p.quitting {
-            "SAVING NVRAM..."
-        } else {
-            p.state.phase.label()
-        },
-        TEXT,
-    )?;
-    text(c, 300, 746, "SS-5  |  128 MiB  |  CGsix", MUTED)?;
-    text(
-        c,
-        638,
-        746,
-        if p.captured {
-            "KEYBOARD CAPTURED / Ctrl+Enter"
-        } else {
-            "Click display to capture keyboard"
-        },
-        BORDER,
-    )?;
+    draw_hints(c, &p)?;
+    draw_leds(c, &p)?;
     if let Some(o) = p.overlay {
-        draw_overlay(c, o, p.state)?;
+        draw_overlay(c, o, p.state, p.settings)?;
     }
-    if let Some((confirm, yes)) = p.confirm {
+    if let Some((confirm, choice)) = p.confirm {
         fill(c, Rect::new(0, 0, WIDTH, HEIGHT), Color::RGBA(0, 0, 0, 170))?;
         panel(c, Rect::new(220, 300, 520, 154))?;
         text(c, 244, 326, confirm.text(), TEXT)?;
@@ -156,23 +132,30 @@ pub fn draw(
                 "Shut down the guest OS first if it is running.",
                 MUTED,
             )?;
+        } else {
+            text(
+                c,
+                244,
+                352,
+                "F9 saves, or discard to close without applying the draft.",
+                MUTED,
+            )?;
         }
-        text(
-            c,
-            308,
-            400,
-            if yes {
-                "[ Yes ]       Cancel"
+        let choices = confirm.choices();
+        let origin = confirm_origin(choices.len());
+        for (index, label) in choices.iter().enumerate() {
+            let value = if index == choice {
+                format!("[ {label} ]")
             } else {
-                "  Yes       [ Cancel ]"
-            },
-            ACCENT,
-        )?;
+                format!("  {label}  ")
+            };
+            text(c, origin + index as i32 * CONFIRM_SLOT, 400, &value, ACCENT)?;
+        }
         text(
             c,
             244,
             430,
-            "Left/Right select   Enter confirm   Escape cancel",
+            "Arrows select   Enter confirm   Escape cancel",
             MUTED,
         )?;
     }
@@ -198,11 +181,163 @@ pub fn draw(
     Ok(())
 }
 
-fn draw_overlay(c: &mut WindowCanvas, o: &Overlay, state: &Snapshot) -> Result<(), sdl3::Error> {
-    fill(c, Rect::new(0, 0, WIDTH, 710), Color::RGBA(0, 0, 0, 150))?;
+#[derive(Clone, Copy)]
+struct LedPalette {
+    idle: Color,
+    active: Color,
+}
+const RUN_LED: LedPalette = LedPalette {
+    idle: Color::RGB(25, 50, 110),
+    active: Color::RGB(90, 160, 255),
+};
+const CPU_LED: LedPalette = LedPalette {
+    idle: Color::RGB(55, 55, 55),
+    active: Color::RGB(255, 255, 255),
+};
+const DISK_LED: LedPalette = LedPalette {
+    idle: Color::RGB(18, 70, 18),
+    active: Color::RGB(80, 255, 80),
+};
+const CD_LED: LedPalette = LedPalette {
+    idle: Color::RGB(15, 60, 60),
+    active: Color::RGB(80, 220, 220),
+};
+const WRITE_LED: Color = Color::RGB(255, 200, 90);
+
+fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Error> {
+    if !p.settings.show_status {
+        return Ok(());
+    }
+    let y = (HEIGHT - LED_HEIGHT - HINT_HEIGHT) as i32;
+    fill(
+        c,
+        Rect::new(0, y, WIDTH, HINT_HEIGHT),
+        Color::RGB(0x10, 0x10, 0x14),
+    )?;
+    let status = if p.quitting {
+        "SAVING NVRAM...".into()
+    } else {
+        format!("{}  |  SS-5 / 128 MiB / CGsix", p.state.phase.label())
+    };
+    let keys = if p.captured {
+        "  Ctrl+Enter=release  Ctrl+P=pause  F4=shot  F5=reset  F9=options  F12=quit"
+    } else {
+        "  Ctrl+P=boot/pause  F4=shot  F5=reset  F9=options  F11=full  F12=quit"
+    };
+    let width = (status.len() + keys.len()) as f32 * 8.0;
+    let scale = ((WIDTH - 16) as f32 / width).min(1.0);
+    let x = ((WIDTH as f32 - width * scale) / 2.0 / scale) as i32;
+    let text_y = (y as f32 + (HINT_HEIGHT as f32 - 8.0 * scale) / 2.0) / scale;
+    c.set_scale(scale, scale)?;
+    text(c, x, text_y as i32, &status, STATUS)?;
+    text(c, x + 1, text_y as i32, &status, STATUS)?;
+    text(
+        c,
+        x + status.len() as i32 * 8,
+        text_y as i32,
+        keys,
+        Color::RGB(224, 224, 224),
+    )?;
+    c.set_scale(1.0, 1.0)?;
+    Ok(())
+}
+
+fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Error> {
+    let y = (HEIGHT - LED_HEIGHT) as i32;
+    fill(
+        c,
+        Rect::new(0, y, WIDTH, LED_HEIGHT),
+        Color::RGB(18, 18, 18),
+    )?;
+    fill(c, Rect::new(0, y, WIDTH, 1), Color::RGB(50, 50, 50))?;
+    if p.captured {
+        text(
+            c,
+            8,
+            y + 7,
+            "CAPTURED / Ctrl+Enter",
+            Color::RGB(255, 96, 80),
+        )?;
+    }
+    let mut lamps = vec![
+        (
+            "RUN".to_owned(),
+            p.state.phase == Phase::Running,
+            false,
+            RUN_LED,
+        ),
+        (
+            "CPU".to_owned(),
+            p.leds & activity::cpu() != 0,
+            false,
+            CPU_LED,
+        ),
+    ];
+    for (id, target) in p.settings.scsi.iter().enumerate() {
+        let Some(kind) = target.kind.media_kind() else {
+            continue;
+        };
+        let disk = kind == helios::devices::scsi::MediaKind::Disk;
+        let read = activity::disk_read(id);
+        let write = activity::disk_write(id);
+        lamps.push((
+            format!("{}{id}", if disk { "HD" } else { "CD" }),
+            p.leds & (read | write) != 0,
+            p.leds & write != 0,
+            if disk { DISK_LED } else { CD_LED },
+        ));
+    }
+    let width: i32 = lamps
+        .iter()
+        .map(|(label, ..)| 20 + label.len() as i32 * 8)
+        .sum::<i32>()
+        + (lamps.len() as i32 - 1) * 8;
+    let mut x = (WIDTH as i32 - width) / 2;
+    let lamp_y = y + (LED_HEIGHT as i32 - 10) / 2;
+    for (label, lit, write, palette) in lamps {
+        let color = if !lit {
+            palette.idle
+        } else if write {
+            WRITE_LED
+        } else {
+            palette.active
+        };
+        let rect = Rect::new(x, lamp_y, 14, 10);
+        fill(c, rect, color)?;
+        c.set_draw_color(Color::RGB(0, 0, 0));
+        c.draw_rect(rect)?;
+        text(c, x + 20, lamp_y + 1, &label, Color::RGB(205, 205, 205))?;
+        x += 20 + label.len() as i32 * 8 + 8;
+    }
+    Ok(())
+}
+
+fn confirm_origin(count: usize) -> i32 {
+    (WIDTH as i32 - count as i32 * CONFIRM_SLOT) / 2 + 30
+}
+
+pub fn confirm_choice_at(x: i32, y: i32, count: usize) -> Option<usize> {
+    let origin = confirm_origin(count);
+    if !(CONFIRM_Y..CONFIRM_Y + 35).contains(&y) || x < origin {
+        return None;
+    }
+    let index = ((x - origin) / CONFIRM_SLOT) as usize;
+    (index < count).then_some(index)
+}
+
+fn draw_overlay(
+    c: &mut WindowCanvas,
+    o: &Overlay,
+    state: &Snapshot,
+    settings: &Settings,
+) -> Result<(), sdl3::Error> {
+    fill(c, Rect::new(0, 0, WIDTH, HEIGHT), Color::RGBA(0, 0, 0, 150))?;
     panel(c, Rect::new(112, 100, 736, 540))?;
     text(c, 136, 122, "HELIACAL / OPTIONS", TEXT)?;
-    text(c, 568, 122, "SPARCstation 5 / 128 MiB", MUTED)?;
+    text(c, 568, 122, "SS-5 / 128 MiB", MUTED)?;
+    if o.dirty(settings) {
+        text(c, 696, 122, "Unsaved changes", Color::RGB(255, 208, 128))?;
+    }
     for (i, tab) in o.tabs().iter().enumerate() {
         let x = 136 + i as i32 * 136;
         if *tab == o.tab {
@@ -338,9 +473,9 @@ fn draw_overlay(c: &mut WindowCanvas, o: &Overlay, state: &Snapshot) -> Result<(
         if o.edit.is_some() {
             "Type path / Ctrl+V paste / Ctrl+U clear / Enter accept / Esc cancel"
         } else if o.tab == Tab::Media {
-            "Space type / Enter image path / Ctrl+B browse / Delete detach"
+            "Space type / Enter choose image / Ctrl+E type path / Delete detach"
         } else {
-            "Arrows navigate / Enter edit / Ctrl+B browse / Delete detach"
+            "Arrows navigate / Enter choose file / Ctrl+E type path / Delete detach"
         },
         MUTED,
     )?;

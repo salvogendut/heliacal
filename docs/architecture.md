@@ -8,9 +8,10 @@ or substitute a synthetic boot display.
 
 `src/main.rs` owns the SDL event/render loop, host shortcuts, file-picker
 completion, confirmations, and application lifetime. `view.rs` draws the guest
-texture, paused screen, F9 overlay, notifications, and status strip. SDL's
-built-in debug font supplies the compact Happy Years text. `overlay.rs` holds
-the editable settings draft independently from live preferences.
+texture, paused screen, F9 overlay, notifications, status hints, and RUN/CPU/
+SCSI activity LEDs. SDL's built-in debug font supplies the compact Happy Years
+text. `overlay.rs` holds the editable settings draft independently from live
+preferences; F9 saves it, and closing a dirty draft prompts Save/Discard/Cancel.
 
 `emulator.rs` owns `Machine` on one worker thread. Construction and image
 loading happen there. A bounded command channel controls boot/pause/shutdown.
@@ -21,8 +22,10 @@ The worker advances guest time only through `Machine::step`. It publishes one
 latest immutable RGBA framebuffer and a small status snapshot, at most about
 30 times per host second. The main thread renders at about 60 Hz and never
 holds a machine lock. Old frames are replaced rather than queued. The
-1152x900 guest display is fitted within the logical 960x760 desktop; window
-resizing and high-DPI rendering do not affect guest time.
+1152x900 guest display is fitted within the logical 960x760 desktop, above the
+16-pixel hint strip and 22-pixel LED strip; window resizing and high-DPI
+rendering do not affect guest time. LED pulses are presentation-only and never
+feed back into guest scheduling.
 
 `input.rs` maps SDL physical scancodes to Sun Type 5 US stations, following
 Helios's existing native keyboard mapping. Shared stations (left/right Ctrl,

@@ -1,3 +1,4 @@
+mod activity;
 mod emulator;
 mod input;
 mod overlay;
@@ -7,6 +8,7 @@ mod view;
 use emulator::{Emulator, Phase};
 use overlay::{Confirm, Field, Overlay};
 use sdl3::{
+    dialog::DialogFileFilter,
     event::{Event, WindowEvent},
     keyboard::{Mod, Scancode},
     pixels::PixelFormat,
@@ -15,7 +17,7 @@ use sdl3::{
 use settings::{ScsiTarget, Settings, TargetKind};
 use std::{
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -26,6 +28,37 @@ type FilePicker = (
 );
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+const PROM_FILTERS: [DialogFileFilter<'static>; 2] = [
+    DialogFileFilter {
+        name: "Sun PROM firmware",
+        pattern: "bin;rom;prom",
+    },
+    DialogFileFilter {
+        name: "All files",
+        pattern: "*",
+    },
+];
+const ROM_FILTERS: [DialogFileFilter<'static>; 2] = [
+    DialogFileFilter {
+        name: "FCode ROM",
+        pattern: "bin;rom;fcode",
+    },
+    DialogFileFilter {
+        name: "All files",
+        pattern: "*",
+    },
+];
+const MEDIA_FILTERS: [DialogFileFilter<'static>; 2] = [
+    DialogFileFilter {
+        name: "Disk and CD images",
+        pattern: "chd;img;raw;dsk;hdd;iso;efs;bin;image",
+    },
+    DialogFileFilter {
+        name: "All files",
+        pattern: "*",
+    },
+];
 
 #[derive(Default)]
 struct Options {
@@ -46,7 +79,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5 / microSPARC-II 85 MHz / 128 MiB RAM / TurboGX.\nStarts paused. Supply your own firmware. Media is read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard; Ctrl+Enter releases it.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter edit, Ctrl+B browse, F9 save.\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5 / microSPARC-II 85 MHz / 128 MiB RAM / TurboGX.\nStarts paused. Supply your own firmware. Media is read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard; Ctrl+Enter releases it.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -82,7 +115,8 @@ struct App {
     config: PathBuf,
     emulator: Emulator,
     overlay: Option<Overlay>,
-    confirm: Option<(Confirm, bool)>,
+    confirm: Option<(Confirm, usize)>,
+    picker: Option<FilePicker>,
     held: input::HeldKeys,
     captured: bool,
     quitting: bool,
@@ -99,7 +133,7 @@ impl App {
     }
     fn ask(&mut self, confirm: Confirm) {
         self.release();
-        self.confirm = Some((confirm, false));
+        self.confirm = Some((confirm, confirm.default_choice()));
     }
     fn save(&mut self) {
         let Some(o) = &mut self.overlay else {
@@ -124,40 +158,87 @@ impl App {
         if self
             .overlay
             .as_ref()
-            .is_some_and(|o| o.draft != self.settings)
+            .is_some_and(|o| o.dirty(&self.settings))
         {
-            self.ask(Confirm::Discard);
+            self.ask(Confirm::Unsaved);
         } else {
             self.overlay = None;
         }
     }
-    fn activate(&mut self) {
+    fn browse(
+        &mut self,
+        field: Field,
+        window: &sdl3::video::Window,
+    ) -> std::result::Result<(), String> {
+        let filters: &[DialogFileFilter] = match field {
+            Field::Prom => &PROM_FILTERS,
+            Field::Rom => &ROM_FILTERS,
+            Field::Scsi(_) => &MEDIA_FILTERS,
+            _ => return Ok(()),
+        };
+        let location = self
+            .overlay
+            .as_ref()
+            .and_then(|o| o.path(field))
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                let path = PathBuf::from(path);
+                if path.is_relative() {
+                    self.config.parent().unwrap_or(Path::new(".")).join(path)
+                } else {
+                    path
+                }
+            });
+        let (send, receive) = mpsc::sync_channel(1);
+        sdl3::dialog::show_open_file_dialog(
+            filters,
+            location,
+            false,
+            window,
+            Box::new(move |files, _| {
+                let _ = send.try_send(files.map_err(|e| e.to_string()));
+            }),
+        )
+        .map_err(|e| e.to_string())?;
+        self.picker = Some((field, receive));
+        Ok(())
+    }
+    fn picked(&mut self, field: Field, path: &std::path::Path) {
         if let Some(o) = &mut self.overlay {
-            match o.field() {
-                Field::Save => self.save(),
-                Field::Discard => self.close_overlay(),
+            o.set_path(field, path.display().to_string());
+        }
+    }
+    fn activate(&mut self, window: &sdl3::video::Window) -> std::result::Result<(), String> {
+        if let Some(o) = &mut self.overlay {
+            let field = o.field();
+            match field {
+                field if field.is_path() => self.browse(field, window)?,
                 _ => o.activate(),
             }
         }
+        Ok(())
     }
     fn confirm(&mut self) {
-        if let Some((action, yes)) = self.confirm.take() {
-            if !yes {
-                return;
+        let Some((action, choice)) = self.confirm.take() else {
+            return;
+        };
+        let result = match action {
+            Confirm::Quit if choice == 0 => self.emulator.shutdown().map(|()| self.quitting = true),
+            Confirm::Reset if choice == 0 => self
+                .emulator
+                .boot(self.settings.resolve(self.config.parent().unwrap())),
+            Confirm::Unsaved if choice == 0 => {
+                self.save();
+                Ok(())
             }
-            let result = match action {
-                Confirm::Quit => self.emulator.shutdown().map(|()| self.quitting = true),
-                Confirm::Reset => self
-                    .emulator
-                    .boot(self.settings.resolve(self.config.parent().unwrap())),
-                Confirm::Discard => {
-                    self.overlay = None;
-                    Ok(())
-                }
-            };
-            if let Err(error) = result {
-                self.notify(error);
+            Confirm::Unsaved if choice == 1 => {
+                self.overlay = None;
+                Ok(())
             }
+            _ => Ok(()),
+        };
+        if let Err(error) = result {
+            self.notify(error);
         }
     }
     fn screenshot(&mut self) -> Result<()> {
@@ -204,8 +285,14 @@ impl App {
         if self.confirm.is_some() {
             match key {
                 Scancode::Escape => self.confirm = None,
-                Scancode::Left | Scancode::Right | Scancode::Tab => {
-                    self.confirm.as_mut().unwrap().1 ^= true;
+                Scancode::Left | Scancode::Up | Scancode::Tab => {
+                    let (action, choice) = self.confirm.as_mut().unwrap();
+                    let count = action.choices().len();
+                    *choice = (*choice + count - 1) % count;
+                }
+                Scancode::Right | Scancode::Down => {
+                    let (action, choice) = self.confirm.as_mut().unwrap();
+                    *choice = (*choice + 1) % action.choices().len();
                 }
                 Scancode::Return => self.confirm(),
                 _ => {}
@@ -252,7 +339,12 @@ impl App {
                 Scancode::Right => o.switch_tab(1),
                 Scancode::Tab => o.switch_tab(if shift { -1 } else { 1 }),
                 Scancode::Space if matches!(o.field(), Field::Scsi(_)) => o.cycle_target(),
-                Scancode::Return | Scancode::Space => self.activate(),
+                Scancode::B if ctrl && o.field().is_path() => {
+                    let field = o.field();
+                    self.browse(field, window)?;
+                }
+                Scancode::E if ctrl && o.field().is_path() => o.activate(),
+                Scancode::Return | Scancode::Space => self.activate(window)?,
                 Scancode::Delete => o.detach(),
                 _ => {}
             }
@@ -364,6 +456,7 @@ fn run(options: Options) -> Result<()> {
         emulator,
         overlay: None,
         confirm: None,
+        picker: None,
         held: input::HeldKeys::default(),
         captured: false,
         quitting: false,
@@ -406,9 +499,11 @@ fn run(options: Options) -> Result<()> {
     let mut events = sdl.event_pump()?;
     let mut frame_id = u64::MAX;
     let mut count = 0;
+    let mut leds = activity::Leds::default();
+    let mut last_steps = 0;
+    let mut last_scsi = [(0u64, 0u64); settings::SCSI_TARGETS];
     let started = Instant::now();
     let mut display_at: Option<Instant> = None;
-    let mut picker: Option<FilePicker> = None;
     if options.boot_smoke {
         app.emulator.boot(app.settings.clone())?;
     }
@@ -426,31 +521,8 @@ fn run(options: Options) -> Result<()> {
                     keymod,
                     repeat: false,
                     ..
-                } if picker.is_none() => {
-                    if key == Scancode::B
-                        && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD)
-                        && app.confirm.is_none()
-                        && app.overlay.as_ref().is_some_and(|o| o.edit.is_none())
-                    {
-                        let o = app.overlay.as_mut().unwrap();
-                        let field = o.field();
-                        if o.path_mut(field).is_some() {
-                            let (send, receive) = mpsc::sync_channel(1);
-                            let result = sdl3::dialog::show_open_file_dialog(
-                                &[],
-                                None::<&std::path::Path>,
-                                false,
-                                canvas.window(),
-                                Box::new(move |files, _| {
-                                    let _ = send.try_send(files.map_err(|e| e.to_string()));
-                                }),
-                            );
-                            match result {
-                                Ok(()) => picker = Some((field, receive)),
-                                Err(e) => app.notify(e.to_string()),
-                            }
-                        }
-                    } else if let Err(error) = app.key(key, keymod, &video, canvas.window_mut()) {
+                } if app.picker.is_none() => {
+                    if let Err(error) = app.key(key, keymod, &video, canvas.window_mut()) {
                         app.notify(error.to_string());
                     }
                 }
@@ -464,7 +536,7 @@ fn run(options: Options) -> Result<()> {
                         app.release();
                     }
                 }
-                Event::TextInput { text, .. } if picker.is_none() => {
+                Event::TextInput { text, .. } if app.picker.is_none() => {
                     if let Some(edit) = app.overlay.as_mut().and_then(|o| o.edit.as_mut()) {
                         let remaining = 4096usize.saturating_sub(edit.len());
                         edit.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
@@ -475,16 +547,12 @@ fn run(options: Options) -> Result<()> {
                     x,
                     y,
                     ..
-                } if picker.is_none() && !app.quitting => {
+                } if app.picker.is_none() && !app.quitting => {
                     let (x, y) = view::point(x, y, canvas.window().size());
-                    if let Some((_, yes)) = app.confirm.as_mut() {
-                        if (390..425).contains(&y) {
-                            if (290..360).contains(&x) {
-                                *yes = true;
-                                app.confirm();
-                            } else if (390..500).contains(&x) {
-                                app.confirm = None;
-                            }
+                    if let Some((action, choice)) = app.confirm.as_mut() {
+                        if let Some(index) = view::confirm_choice_at(x, y, action.choices().len()) {
+                            *choice = index;
+                            app.confirm();
                         }
                     } else if let Some(o) = app.overlay.as_mut() {
                         if o.edit.is_none() {
@@ -500,12 +568,15 @@ fn run(options: Options) -> Result<()> {
                                     if matches!(o.field(), Field::Scsi(_)) && x < 420 {
                                         o.cycle_target();
                                     } else {
-                                        app.activate();
+                                        let result = app.activate(canvas.window());
+                                        if let Err(error) = result {
+                                            app.notify(error.to_string());
+                                        }
                                     }
                                 }
                             }
                         }
-                    } else if view::guest_rect().contains_point((x, y))
+                    } else if view::guest_rect(app.settings.show_status).contains_point((x, y))
                         && app.emulator.snapshot().phase == Phase::Running
                     {
                         app.captured = true;
@@ -514,19 +585,28 @@ fn run(options: Options) -> Result<()> {
                 _ => {}
             }
         }
-        if let Some((field, receive)) = &picker
-            && let Ok(result) = receive.try_recv()
-        {
-            match result {
-                Ok(files) => {
-                    if let (Some(o), Some(path)) = (&mut app.overlay, files.first()) {
-                        o.set_path(*field, path.display().to_string());
-                    }
+        let polled = app
+            .picker
+            .as_ref()
+            .map(|(field, receive)| (*field, receive.try_recv()));
+        match polled {
+            Some((field, Ok(Ok(files)))) => {
+                if let Some(path) = files.first() {
+                    app.picked(field, path);
                 }
-                Err(error) if error != "Canceled" => app.notify(error),
-                Err(_) => {}
+                app.picker = None;
             }
-            picker = None;
+            Some((_, Ok(Err(error)))) => {
+                if error != "Canceled" {
+                    app.notify(error);
+                }
+                app.picker = None;
+            }
+            Some((_, Err(mpsc::TryRecvError::Disconnected))) => {
+                app.picker = None;
+                app.notify("File picker closed without a selection.");
+            }
+            Some((_, Err(mpsc::TryRecvError::Empty))) | None => {}
         }
         let text_input = video.text_input();
         let editing = app.overlay.as_ref().is_some_and(|o| o.edit.is_some());
@@ -539,6 +619,22 @@ fn run(options: Options) -> Result<()> {
         }
         canvas.window_mut().set_keyboard_grab(app.captured);
         let state = app.emulator.snapshot();
+        let mut events = 0;
+        if state.phase == Phase::Running && state.steps > last_steps {
+            events |= activity::cpu();
+        }
+        last_steps = state.steps;
+        for (id, (reads, writes)) in state.scsi_activity.iter().enumerate() {
+            let (last_reads, last_writes) = last_scsi[id];
+            if *reads > last_reads {
+                events |= activity::disk_read(id);
+            }
+            if *writes > last_writes {
+                events |= activity::disk_write(id);
+            }
+            last_scsi[id] = (*reads, *writes);
+        }
+        leds.update(events, Instant::now());
         if app.quitting && state.shutdown_failed {
             app.quitting = false;
             app.notify("NVRAM could not be saved; machine retained. Fix the path/permissions and retry quit.");
@@ -572,6 +668,7 @@ fn run(options: Options) -> Result<()> {
                 overlay: app.overlay.as_ref(),
                 confirm: app.confirm,
                 captured: app.captured,
+                leds: leds.lit,
                 notice: app.notice.as_ref().map(|(s, _)| s.as_str()),
                 quitting: app.quitting,
             },
@@ -603,9 +700,7 @@ fn run(options: Options) -> Result<()> {
                     for _ in 0..cycles {
                         app.key(Scancode::Space, Mod::NOMOD, &video, canvas.window_mut())?;
                     }
-                    app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
-                    app.overlay.as_mut().unwrap().edit = Some(path.display().to_string());
-                    app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                    app.picked(Field::Scsi(id), &path);
                 }
                 assert!(app.settings.scsi[0].path.is_empty());
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
@@ -618,13 +713,30 @@ fn run(options: Options) -> Result<()> {
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.notice = None;
             }
+            if count == 8 {
+                app.key(Scancode::Left, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Escape, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert!(matches!(app.confirm, Some((Confirm::Unsaved, 2))));
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert!(app.overlay.is_some() && app.confirm.is_none());
+                app.key(Scancode::Escape, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Left, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert!(matches!(app.confirm, Some((Confirm::Unsaved, 1))));
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert!(app.overlay.is_none());
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.notice = None;
+            }
             if count == 10 {
                 assert_eq!(state.phase, Phase::Ready);
                 if let Some(path) = &options.screenshot {
                     canvas.read_pixels(None)?.save_bmp(path)?;
                 }
                 println!(
-                    "SDL smoke test passed: paused launch, overlay editing, SCSI targets and saved settings."
+                    "SDL smoke test passed: paused launch, overlay editing, unsaved draft dialog, SCSI targets and saved settings."
                 );
                 app.emulator.shutdown()?;
                 app.quitting = true;
