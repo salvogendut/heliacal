@@ -1,0 +1,6 @@
+/target/
+/local/
+*.cfg
+*.nvram
+*.cfg.lock
+/heliacal-*.ppm

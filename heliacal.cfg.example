@@ -1,0 +1,22 @@
+model = "sparcstation5"
+ram_mib = 128
+# Paths are relative to this config's directory. Select your own ROMs in F9.
+prom = ""
+cgsix_rom = ""
+smoothing = false
+scanlines = false
+show_status = true
+tinker = false
+
+# Entries are in SCSI ID order, 0 through 6. ID 7 is the host adapter.
+# Use kind = "disk" or "cdrom" and supply a raw/ISO path to attach media.
+# All images are read-only. Empty paths leave the target unattached.
+scsi = [
+  { kind = "disconnected", path = "" }, # ID 0
+  { kind = "disconnected", path = "" }, # ID 1
+  { kind = "disconnected", path = "" }, # ID 2
+  { kind = "disk",         path = "" }, # ID 3
+  { kind = "disconnected", path = "" }, # ID 4
+  { kind = "disconnected", path = "" }, # ID 5
+  { kind = "cdrom",        path = "" }, # ID 6
+]
