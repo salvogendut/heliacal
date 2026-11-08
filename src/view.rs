@@ -202,6 +202,10 @@ const CD_LED: LedPalette = LedPalette {
     idle: Color::RGB(15, 60, 60),
     active: Color::RGB(80, 220, 220),
 };
+const NET_LED: LedPalette = LedPalette {
+    idle: Color::RGB(25, 35, 75),
+    active: Color::RGB(120, 180, 255),
+};
 const WRITE_LED: Color = Color::RGB(255, 200, 90);
 
 fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Error> {
@@ -277,6 +281,14 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
             CPU_LED,
         ),
     ];
+    if p.settings.network {
+        lamps.push((
+            "NET".to_owned(),
+            p.leds & activity::ethernet() != 0,
+            false,
+            NET_LED,
+        ));
+    }
     for (id, target) in p.settings.scsi.iter().enumerate() {
         let Some(kind) = target.kind.media_kind() else {
             continue;

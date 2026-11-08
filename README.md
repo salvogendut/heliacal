@@ -152,7 +152,9 @@ configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
 network (gateway 192.168.0.1), for example:
 `ifconfig le0 plumb 192.168.0.2 netmask 255.255.255.0 up` and
 `route add default 192.168.0.1`. The OS already detects `le0`; it is the
-guest network configuration that turns the interface up.
+guest network configuration that turns the interface up. The status strip shows
+RUN, CPU, NET and attached-media activity lamps; NET pulses as Ethernet frames
+cross the NAT.
 Native desktop file-picker behavior and non-Linux hosts need interactive
 validation. The existing Prismatic and Iris repositories are independent.
 

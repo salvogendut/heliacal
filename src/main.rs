@@ -502,6 +502,7 @@ fn run(options: Options) -> Result<()> {
     let mut leds = activity::Leds::default();
     let mut last_steps = 0;
     let mut last_scsi = [(0u64, 0u64); settings::SCSI_TARGETS];
+    let mut last_network = 0u64;
     let started = Instant::now();
     let mut display_at: Option<Instant> = None;
     if options.boot_smoke {
@@ -639,6 +640,10 @@ fn run(options: Options) -> Result<()> {
             events |= activity::cpu();
         }
         last_steps = state.steps;
+        if state.network_activity > last_network {
+            events |= activity::ethernet();
+        }
+        last_network = state.network_activity;
         for (id, (reads, writes)) in state.scsi_activity.iter().enumerate() {
             let (last_reads, last_writes) = last_scsi[id];
             if *reads > last_reads {

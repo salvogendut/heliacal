@@ -257,9 +257,9 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     Ok(machine)
 }
 
-fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: Instant) {
+fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: Instant) -> u64 {
     let Some(network) = network.as_mut() else {
-        return;
+        return 0;
     };
     loop {
         let frame = machine.bus.devices_mut().unwrap().ethernet.take_frame();
@@ -280,6 +280,7 @@ fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: 
             break;
         }
     }
+    network.stats().guest_frames + network.stats().host_frames
 }
 
 fn load_nvram(path: &Path) -> Result<Nvram, String> {
@@ -378,6 +379,7 @@ fn run(
                             state.phase = Phase::Running;
                             state.has_machine = true;
                             state.steps = 0;
+                            state.network_activity = 0;
                             state.serial.clear();
                             state.error = None;
                             pressed.fill(false);
@@ -441,7 +443,7 @@ fn run(
             match m.step() {
                 Ok(_) => {
                     state.steps += 1;
-                    service_network(m, &mut network, Instant::now());
+                    state.network_activity = service_network(m, &mut network, Instant::now());
                 }
                 Err(error) if error.is_power_off() => {
                     state.phase = Phase::Stopped;
