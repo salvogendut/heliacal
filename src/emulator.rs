@@ -410,6 +410,12 @@ fn run(
             }
             match m.step() {
                 Ok(_) => state.steps += 1,
+                Err(error) if error.is_power_off() => {
+                    state.phase = Phase::Stopped;
+                    state.error = None;
+                    state.serial.push_str("\nSystem powered off.\n");
+                    break;
+                }
                 Err(error) => {
                     state.phase = Phase::Failed;
                     state.error = Some(format!("Helios stopped at PC={:08x}: {error:?}", error.pc));
