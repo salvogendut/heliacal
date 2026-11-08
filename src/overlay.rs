@@ -5,6 +5,7 @@ pub enum Tab {
     General,
     Display,
     Media,
+    Network,
     Advanced,
     About,
 }
@@ -14,6 +15,7 @@ impl Tab {
             Self::General => "General",
             Self::Display => "Display",
             Self::Media => "Media",
+            Self::Network => "Network",
             Self::Advanced => "Advanced",
             Self::About => "About",
         }
@@ -26,6 +28,7 @@ pub enum Field {
     Rom,
     Scsi(usize),
     DiskAccess,
+    Network,
     Smoothing,
     Scanlines,
     Status,
@@ -61,6 +64,7 @@ impl Overlay {
             Tab::General,
             Tab::Display,
             Tab::Media,
+            Tab::Network,
             Tab::Advanced,
             Tab::About,
         ]
@@ -112,6 +116,20 @@ impl Overlay {
                 )
             })
             .collect(),
+            Tab::Network => vec![
+                (
+                    "Host networking",
+                    on_off(self.draft.network),
+                    Field::Network,
+                ),
+                (
+                    "NAT guest",
+                    "192.168.0.2 / 255.255.255.0".into(),
+                    Field::Fixed,
+                ),
+                ("NAT gateway", "192.168.0.1".into(), Field::Fixed),
+                ("Guest setup", "DHCP or static le0".into(), Field::Fixed),
+            ],
             Tab::Advanced => vec![(
                 "Disk access",
                 if self.draft.disk_read_only {
@@ -170,6 +188,7 @@ impl Overlay {
     pub fn activate(&mut self) {
         match self.field() {
             Field::DiskAccess => self.draft.disk_read_only ^= true,
+            Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
             Field::Scanlines => self.draft.scanlines ^= true,
             Field::Status => self.draft.show_status ^= true,
@@ -293,6 +312,20 @@ mod tests {
         assert_eq!(Confirm::Unsaved.choices(), ["Save", "Discard", "Cancel"]);
         assert_eq!(Confirm::Quit.default_choice(), 1);
     }
+    #[test]
+    fn network_tab_toggles_the_draft_and_requires_a_cold_reset() {
+        let settings = Settings::default();
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Network;
+        o.selected = 0;
+        assert_eq!(o.field(), Field::Network);
+        assert!(o.draft.network);
+        o.activate();
+        assert!(!o.draft.network);
+        assert!(o.dirty(&settings));
+        assert!(!settings.hardware_eq(&o.draft));
+    }
+
     #[test]
     fn advanced_disk_access_toggles_the_draft_and_is_dirty() {
         let settings = Settings::default();

@@ -7,10 +7,11 @@ smoothing = false
 scanlines = false
 show_status = true
 tinker = false
+network = true
 
 # Entries are in SCSI ID order, 0 through 6. ID 7 is the host adapter.
 # Use kind = "disk" or "cdrom" and supply a raw/ISO path to attach media.
-# All images are read-only. Empty paths leave the target unattached.
+# Disks default to read/write; CDs are always read-only. Empty paths leave the target unattached.
 scsi = [
   { kind = "disconnected", path = "" }, # ID 0
   { kind = "disconnected", path = "" }, # ID 1

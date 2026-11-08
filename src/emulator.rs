@@ -7,6 +7,7 @@ use helios::{
         serial::Channel,
     },
     machine::Machine,
+    net::{NatConfig, NatEngine},
 };
 use std::{
     collections::VecDeque,
@@ -256,6 +257,31 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     Ok(machine)
 }
 
+fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: Instant) {
+    let Some(network) = network.as_mut() else {
+        return;
+    };
+    loop {
+        let frame = machine.bus.devices_mut().unwrap().ethernet.take_frame();
+        let Some(frame) = frame else {
+            break;
+        };
+        network.input(&frame, now);
+    }
+    network.poll(now);
+    while let Some(frame) = network.output() {
+        if !machine
+            .bus
+            .devices_mut()
+            .unwrap()
+            .ethernet
+            .receive_frame(&frame)
+        {
+            break;
+        }
+    }
+}
+
 fn load_nvram(path: &Path) -> Result<Nvram, String> {
     match fs::read(path) {
         Ok(bytes) => Nvram::from_image(&bytes).map_err(|e| format!("{}: {e}", path.display())),
@@ -294,6 +320,7 @@ fn run(
     nvram_path: &Path,
 ) {
     let mut machine: Option<Machine> = None;
+    let mut network: Option<NatEngine> = None;
     let mut state = Snapshot::default();
     let mut frame_at = Instant::now();
     let mut pressed = [false; 128];
@@ -345,6 +372,9 @@ fn run(
                     match nvram.and_then(|n| build(&settings, n)) {
                         Ok(new) => {
                             machine = Some(new);
+                            network = settings
+                                .network
+                                .then(|| NatEngine::new(NatConfig::default()));
                             state.phase = Phase::Running;
                             state.has_machine = true;
                             state.steps = 0;
@@ -409,7 +439,10 @@ fn run(
                 }
             }
             match m.step() {
-                Ok(_) => state.steps += 1,
+                Ok(_) => {
+                    state.steps += 1;
+                    service_network(m, &mut network, Instant::now());
+                }
                 Err(error) if error.is_power_off() => {
                     state.phase = Phase::Stopped;
                     state.error = None;

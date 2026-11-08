@@ -64,6 +64,7 @@ pub struct Settings {
     pub cgsix_rom: String,
     pub scsi: [ScsiTarget; SCSI_TARGETS],
     pub disk_read_only: bool,
+    pub network: bool,
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
@@ -86,6 +87,7 @@ impl Default for Settings {
                 path: String::new(),
             }),
             disk_read_only: false,
+            network: true,
             smoothing: false,
             scanlines: false,
             show_status: true,
@@ -212,6 +214,7 @@ impl Settings {
             && self.cgsix_rom == other.cgsix_rom
             && self.scsi == other.scsi
             && self.disk_read_only == other.disk_read_only
+            && self.network == other.network
     }
 
     // Paths in a config are relative to that config, not the launch directory.
@@ -296,6 +299,7 @@ mod tests {
     #[test]
     fn disk_access_defaults_to_read_write_and_roundtrips_read_only() {
         assert!(!Settings::default().disk_read_only);
+        assert!(Settings::default().network);
         let missing: Settings = toml::from_str("ram_mib = 128").unwrap();
         assert!(!missing.disk_read_only);
         let read_only: Settings = toml::from_str("disk_read_only = true").unwrap();

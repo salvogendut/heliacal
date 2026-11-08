@@ -119,7 +119,8 @@ working directory. CLI overrides are saved only if you choose Save in F9.
 The `scsi` array contains exactly seven entries, in ID order (0 through 6),
 each with `kind = "disconnected"`, `"disk"`, or `"cdrom"` and a `path`.
 The early `disk`/`cdrom` config fields migrate to targets 3/6 on load.
-See [the example configuration](heliacal.cfg.example).
+`network = true` enables the user-mode NAT (default on). See
+[the example configuration](heliacal.cfg.example).
 
 NVRAM is loaded from and atomically saved to `<config-path>.nvram`; the lock
 file is `<config-path>.lock`. Concurrent instances cannot use the same config
@@ -144,8 +145,14 @@ Validated on Linux with SDL3's software/dummy driver: the original Sun PROM
 renders its SPARCstation 5 banner, reports **128 MB installed** and **Keyboard
 Present**, and starts its memory test. This frontend check establishes display
 integration; it does not establish OS boot or installation compatibility.
-Guest mouse is connected after capture; audio, interactive serial, host
-networking, clipboard-to-guest paste, and additional models are not provided yet.
+Guest mouse is connected after capture; audio, interactive serial,
+clipboard-to-guest paste, and additional models are not provided yet. Host
+networking is available as user-mode NAT: enable it in F9 > Network, then
+configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
+network (gateway 192.168.0.1), for example:
+`ifconfig le0 plumb 192.168.0.2 netmask 255.255.255.0 up` and
+`route add default 192.168.0.1`. The OS already detects `le0`; it is the
+guest network configuration that turns the interface up.
 Native desktop file-picker behavior and non-Linux hosts need interactive
 validation. The existing Prismatic and Iris repositories are independent.
 

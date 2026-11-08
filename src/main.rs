@@ -570,7 +570,7 @@ fn run(options: Options) -> Result<()> {
                     } else if let Some(o) = app.overlay.as_mut() {
                         if o.edit.is_none() {
                             if (150..178).contains(&y) && (128..808).contains(&x) {
-                                if let Some(tab) = o.tabs().get(((x - 128) / 136) as usize) {
+                                if let Some(tab) = o.tabs().get(((x - 128) / 112) as usize) {
                                     o.tab = *tab;
                                     o.selected = 0;
                                 }

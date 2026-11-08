@@ -217,7 +217,11 @@ fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Er
     let status = if p.quitting {
         "SAVING NVRAM...".into()
     } else {
-        format!("{}  |  SS-5 / 128 MiB / CGsix", p.state.phase.label())
+        format!(
+            "{}  |  SS-5 / 128 MiB / CGsix / NAT {}",
+            p.state.phase.label(),
+            if p.settings.network { "on" } else { "off" }
+        )
     };
     let keys = if p.captured {
         "  Ctrl+Enter=release  Ctrl+P=pause  F4=shot  F5=reset  F9=options  F12=quit"
@@ -339,9 +343,9 @@ fn draw_overlay(
         text(c, 696, 122, "Unsaved changes", Color::RGB(255, 208, 128))?;
     }
     for (i, tab) in o.tabs().iter().enumerate() {
-        let x = 136 + i as i32 * 136;
+        let x = 136 + i as i32 * 112;
         if *tab == o.tab {
-            fill(c, Rect::new(x - 8, 150, 124, 28), Color::RGB(128, 96, 32))?;
+            fill(c, Rect::new(x - 8, 150, 104, 28), Color::RGB(128, 96, 32))?;
         }
         text(c, x, 160, tab.label(), TEXT)?;
     }
@@ -434,7 +438,8 @@ fn draw_overlay(
                 "Sun SPARCstation 5 / sun4m / SPARC V8 / 128 MiB RAM.",
                 "Interface conventions follow Prismatic and the Happy Years family.",
                 "Sun Type 5 US keyboard: Pause + A sends Stop-A.",
-                "Guest mouse is connected after capture; audio and host networking are not.",
+                "Guest mouse is connected after capture; audio is not.",
+                "Host networking uses a user-mode NAT when enabled in Network.",
                 "Firmware and operating systems are not bundled.",
             ]
             .iter()
@@ -465,6 +470,22 @@ fn draw_overlay(
                 MUTED,
             )?;
         }
+        Tab::Network => {
+            text(
+                c,
+                144,
+                428,
+                "Guest NAT: DHCP/BOOTP, DNS and UDP relay, 192.168.0.2/24.",
+                MUTED,
+            )?;
+            text(
+                c,
+                144,
+                452,
+                "Configure le0 in Solaris with DHCP or a static address and default route.",
+                MUTED,
+            )?;
+        }
         Tab::Display => {
             text(
                 c,
@@ -484,6 +505,8 @@ fn draw_overlay(
             "Type path / Ctrl+V paste / Ctrl+U clear / Enter accept / Esc cancel"
         } else if o.tab == Tab::Advanced {
             "Arrows navigate / Enter toggles disk access"
+        } else if o.tab == Tab::Network {
+            "Arrows navigate / Enter toggles host networking"
         } else if o.tab == Tab::Media {
             "Space type / Enter choose image / Ctrl+E type path / Delete detach"
         } else {
@@ -495,7 +518,7 @@ fn draw_overlay(
         c,
         144,
         602,
-        "F9 Save   Esc Close   Firmware/media/access apply on next cold reset.",
+        "F9 Save   Esc Close   Firmware/media/access/network apply on next cold reset.",
         BORDER,
     )?;
     Ok(())
