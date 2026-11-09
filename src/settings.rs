@@ -87,16 +87,13 @@ impl Model {
     pub fn graphics(self) -> &'static str {
         match self {
             Self::Sparcstation5 => "TurboGX / CGsix / 1152 x 900",
-            Self::Sparcstation20 => "SX / VSIMM (CG14), optional TurboGX",
+            Self::Sparcstation20 => "TurboGX / CGsix / SBus slot 2",
             Self::Axil320 => "TurboGX / CGsix / SBus slot 2",
         }
     }
 
     pub fn graphics_short(self) -> &'static str {
-        match self {
-            Self::Sparcstation5 | Self::Axil320 => "CGsix",
-            Self::Sparcstation20 => "SX/CG14",
-        }
+        "CGsix"
     }
 
     pub fn prom_label(self) -> &'static str {
@@ -119,8 +116,10 @@ impl Model {
         self.profile().default_nvram()
     }
 
+    /// Heliacal uses CG6 for every exposed machine: the core SX is present
+    /// for SS-20 but its guest console path is not yet usable.
     pub fn requires_cgsix(self) -> bool {
-        !matches!(self, Self::Sparcstation20)
+        true
     }
 
     pub fn next(self) -> Self {
@@ -390,7 +389,7 @@ mod tests {
         assert_eq!(s.model, Model::Axil320);
         assert_eq!(s.model.profile(), helios::machine::MachineProfile::Axil320);
         assert!(s.model.requires_cgsix());
-        assert!(!Model::Sparcstation20.requires_cgsix());
+        assert!(Model::Sparcstation20.requires_cgsix());
         assert!(!s.hardware_eq(&Settings::default()));
     }
     #[test]

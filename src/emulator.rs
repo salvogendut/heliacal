@@ -250,6 +250,9 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     } else {
         let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
         let graphics = Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?;
+        if matches!(settings.model, Model::Sparcstation20) {
+            machine.remove_sx();
+        }
         machine.install_cgsix(graphics).map_err(|e| e.to_string())?;
     }
     let devices = machine.bus.devices_mut().unwrap();
@@ -604,15 +607,13 @@ mod tests {
             cgsix_rom: String::new(),
             ..base.clone()
         };
-        let machine = build(&ss20, Nvram::default()).unwrap();
-        assert!(machine.bus.sx().is_some());
-        assert!(machine.bus.cgsix().is_none());
+        assert!(build(&ss20, Nvram::default()).is_err());
         let ss20_gx = Settings {
             model: Model::Sparcstation20,
             ..base.clone()
         };
         let machine = build(&ss20_gx, Nvram::default()).unwrap();
-        assert!(machine.bus.sx().is_some() && machine.bus.cgsix().is_some());
+        assert!(machine.bus.sx().is_none() && machine.bus.cgsix().is_some());
         let axil = Settings {
             model: Model::Axil320,
             ..base

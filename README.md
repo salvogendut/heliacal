@@ -9,9 +9,10 @@ and a status strip plus machine activity LEDs keep the essential state visible.
 
 The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
 or **Axil 320**. All three use sun4m, **128 MiB RAM**, and a **Sun Type 5 US
-keyboard**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus card (slot 1 and
-slot 2 respectively); SS-20 also has its built-in **SX (CG14)** VSIMM and can
-optionally use a TurboGX. RAM sizes are not selectable.
+keyboard**. All three use a **TurboGX (CGsix)** SBus card (SS-5 slot 1, SS-20/Axil
+slot 2). Helios's SS-20 SX/CG14 core is present but its firmware console path
+is not yet usable, so the frontend does not expose the white SX fallback.
+RAM sizes are not selectable.
 
 ## Build and run
 
@@ -55,8 +56,7 @@ You can also select the machine and supply paths for this session:
   --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
 
-Without a TurboGX ROM, SS-20 can use its built-in SX; SS-5 and Axil 320 require
-a TurboGX ROM for a guest display.
+All three machines require a TurboGX ROM for a guest display.
 
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
