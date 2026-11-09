@@ -16,3 +16,7 @@ with `--machine` or the General settings row. The model maps directly to
 - Model changes count as hardware changes and require the normal confirmed cold
   reset. Firmware/media paths remain explicit; switching model does not guess a
   matching PROM path.
+
+The Helios core now enables the SS-20/Axil standalone IOMMU Arbiter Enable
+Register and masks IOPTE physical bits correctly. Axil `probe-scsi-all` lists
+an attached ID 3 disk; the frontend's existing Media selection needs no change.

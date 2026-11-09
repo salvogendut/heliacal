@@ -65,6 +65,8 @@ CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
 the same); **Ctrl+E** lets you type a path instead.
 Use **Delete** to detach and clear a target. Multiple disks and CDs may be
 attached simultaneously. Changes take effect on the next confirmed cold reset.
+The original OBP `probe-scsi-all` discovers attached targets on SS-5 and now
+also through the SS-20/Axil standalone IOMMU.
 
 Targets default to empty, with hard disk/CD-ROM types preselected at IDs 3/6.
 Hard disks use read/write access by default; CDs never use writable access.
