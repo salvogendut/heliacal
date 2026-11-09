@@ -57,6 +57,7 @@ pub struct Snapshot {
     pub has_machine: bool,
     pub shutdown_failed: bool,
     pub scsi_activity: [(u64, u64); SCSI_TARGETS],
+    pub network_activity: u64,
 }
 
 impl Default for Snapshot {
@@ -72,6 +73,7 @@ impl Default for Snapshot {
             has_machine: false,
             shutdown_failed: false,
             scsi_activity: [(0, 0); SCSI_TARGETS],
+            network_activity: 0,
         }
     }
 }
@@ -94,6 +96,12 @@ struct Input {
     mouse: VecDeque<MouseEvent>,
     mouse_buttons: u8,
     release: bool,
+}
+
+#[derive(Default)]
+struct FrameCache {
+    pixels: Vec<u32>,
+    scanout: Option<u64>,
 }
 
 pub struct Emulator {
@@ -291,15 +299,34 @@ fn load_nvram(path: &Path) -> Result<Nvram, String> {
     }
 }
 
-fn publish(machine: &Machine, state: &mut Snapshot, shared: &Mutex<Snapshot>) {
-    let mut pixels = vec![0; WIDTH * HEIGHT];
-    machine.bus.cgsix().unwrap().pixels(&mut pixels);
-    let mut rgba = Vec::with_capacity(pixels.len() * 4);
-    for pixel in pixels {
-        rgba.extend_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8, 255]);
+fn publish(
+    machine: &Machine,
+    state: &mut Snapshot,
+    shared: &Mutex<Snapshot>,
+    frame_cache: &mut FrameCache,
+) {
+    let cgsix = machine.bus.cgsix().unwrap();
+    let scanout = cgsix.scanout_key();
+    if frame_cache.scanout != Some(scanout) {
+        if frame_cache.pixels.len() != WIDTH * HEIGHT {
+            frame_cache.pixels.resize(WIDTH * HEIGHT, 0);
+        }
+        cgsix.pixels(&mut frame_cache.pixels);
+        let rgba = Arc::make_mut(&mut state.pixels);
+        if rgba.len() != WIDTH * HEIGHT * 4 {
+            rgba.resize(WIDTH * HEIGHT * 4, 0);
+        }
+        for (chunk, pixel) in rgba
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(&frame_cache.pixels)
+        {
+            chunk.copy_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8, 255]);
+        }
+        frame_cache.scanout = Some(scanout);
+        state.frame += 1;
     }
-    state.pixels = Arc::new(rgba);
-    state.frame += 1;
     state.pc = machine.cpu.pc();
     state.scsi_activity = std::array::from_fn(|id| {
         machine
@@ -324,8 +351,10 @@ fn run(
     let mut network: Option<NatEngine> = None;
     let mut state = Snapshot::default();
     let mut frame_at = Instant::now();
+    let mut frame_cache = FrameCache::default();
     let mut pressed = [false; 128];
-    let mut releases = VecDeque::new();
+    let mut pending_keys: VecDeque<(u8, bool)> = VecDeque::new();
+    let mut pending_mouse: VecDeque<MouseEvent> = VecDeque::new();
     let mut saved = false;
     loop {
         if abort.load(Ordering::Relaxed) {
@@ -348,7 +377,7 @@ fn run(
                         if state.phase == Phase::Running {
                             state.phase = Phase::Paused;
                         }
-                        publish(m, &mut state, &shared);
+                        publish(m, &mut state, &shared, &mut frame_cache);
                         continue;
                     }
                     state.error = None;
@@ -383,7 +412,8 @@ fn run(
                             state.serial.clear();
                             state.error = None;
                             pressed.fill(false);
-                            releases.clear();
+                            pending_keys.clear();
+                            pending_mouse.clear();
                             let mut keys = input.lock().unwrap();
                             keys.queue.clear();
                             keys.mouse.clear();
@@ -398,7 +428,7 @@ fn run(
                 }
             }
             if let Some(m) = &machine {
-                publish(m, &mut state, &shared);
+                publish(m, &mut state, &shared, &mut frame_cache);
             } else {
                 *shared.lock().unwrap() = state.clone();
             }
@@ -407,44 +437,42 @@ fn run(
             continue;
         }
         let m = machine.as_mut().unwrap();
+        {
+            let mut keys = input.lock().unwrap();
+            if keys.release {
+                keys.release = false;
+                keys.queue.clear();
+                pending_keys.clear();
+                pending_mouse.clear();
+                pending_keys.extend((1..127).filter(|&i| pressed[i]).map(|i| (i as u8, false)));
+                pending_mouse.append(&mut keys.mouse);
+            } else {
+                pending_keys.append(&mut keys.queue);
+                pending_mouse.append(&mut keys.mouse);
+            }
+        }
+        while let Some(event) = pending_mouse.pop_front() {
+            match event {
+                MouseEvent::Motion(dx, dy) => m.mouse_motion(dx, dy),
+                MouseEvent::Button(button, down) => m.mouse_button(button, down),
+            }
+        }
+        state.network_activity = service_network(m, &mut network, Instant::now());
         for _ in 0..2048 {
+            if let Some(&(code, down)) = pending_keys.front()
+                && m.bus
+                    .devices_mut()
+                    .unwrap()
+                    .keyboard
+                    .as_mut()
+                    .unwrap()
+                    .key(code, down)
             {
-                let mut keys = input.lock().unwrap();
-                if keys.release {
-                    releases = (1..127)
-                        .filter(|&i| pressed[i])
-                        .map(|i| (i as u8, false))
-                        .collect();
-                    keys.release = false;
-                }
-                if let Some(&(code, down)) = releases.front().or_else(|| keys.queue.front())
-                    && m.bus
-                        .devices_mut()
-                        .unwrap()
-                        .keyboard
-                        .as_mut()
-                        .unwrap()
-                        .key(code, down)
-                {
-                    pressed[code as usize] = down;
-                    if !releases.is_empty() {
-                        releases.pop_front();
-                    } else {
-                        keys.queue.pop_front();
-                    }
-                }
-                while let Some(event) = keys.mouse.pop_front() {
-                    match event {
-                        MouseEvent::Motion(dx, dy) => m.mouse_motion(dx, dy),
-                        MouseEvent::Button(button, down) => m.mouse_button(button, down),
-                    }
-                }
+                pressed[code as usize] = down;
+                pending_keys.pop_front();
             }
             match m.step() {
-                Ok(_) => {
-                    state.steps += 1;
-                    state.network_activity = service_network(m, &mut network, Instant::now());
-                }
+                Ok(_) => state.steps += 1,
                 Err(error) if error.is_power_off() => {
                     state.phase = Phase::Stopped;
                     state.error = None;
@@ -472,7 +500,7 @@ fn run(
             state.serial.drain(..state.serial.len() - 8192);
         }
         if frame_at.elapsed() >= Duration::from_millis(33) || state.phase != Phase::Running {
-            publish(m, &mut state, &shared);
+            publish(m, &mut state, &shared, &mut frame_cache);
             frame_at = Instant::now();
         }
     }
@@ -486,7 +514,7 @@ fn run(
             // A prior core fault is already visible; it is not a state-save failure.
             state.error = None;
         }
-        publish(&m, &mut state, &shared);
+        publish(&m, &mut state, &shared, &mut frame_cache);
     }
     state.phase = Phase::Stopped;
     *shared.lock().unwrap() = state;
