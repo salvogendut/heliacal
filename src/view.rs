@@ -98,19 +98,26 @@ pub fn draw(
         c.copy(logo, None, Rect::new(350, 90, 260, h))?;
         text(c, 392, 390, "H E L I A C A L", TEXT)?;
         text(c, 368, 418, "Happy Years / Sun SPARC", BORDER)?;
+        let machine = p.settings.model;
         text(
             c,
             304,
             470,
-            "Sun SPARCstation 5  /  microSPARC-II 85 MHz",
+            &format!("{}  /  {}", machine.label(), machine.processor()),
             TEXT,
         )?;
-        text(c, 336, 494, "128 MiB RAM  /  TurboGX graphics", MUTED)?;
+        text(
+            c,
+            336,
+            494,
+            &format!("{} MiB RAM  /  {}", p.settings.ram_mib, machine.graphics()),
+            MUTED,
+        )?;
         text(
             c,
             288,
             552,
-            "F9  Select your Sun PROM and TurboGX ROM",
+            &format!("F9  Select {} and TurboGX ROM", machine.prom_label()),
             ACCENT,
         )?;
         text(c, 352, 578, "Ctrl+P  Boot the workstation", MUTED)?;
@@ -222,8 +229,11 @@ fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Er
         "SAVING NVRAM...".into()
     } else {
         format!(
-            "{}  |  SS-5 / 128 MiB / CGsix / NAT {}",
+            "{}  |  {} / {} MiB / {} / NAT {}",
             p.state.phase.label(),
+            p.settings.model.short_label(),
+            p.settings.ram_mib,
+            p.settings.model.graphics_short(),
             if p.settings.network { "on" } else { "off" }
         )
     };
@@ -350,7 +360,17 @@ fn draw_overlay(
     fill(c, Rect::new(0, 0, WIDTH, HEIGHT), Color::RGBA(0, 0, 0, 150))?;
     panel(c, Rect::new(112, 100, 736, 540))?;
     text(c, 136, 122, "HELIACAL / OPTIONS", TEXT)?;
-    text(c, 568, 122, "SS-5 / 128 MiB", MUTED)?;
+    text(
+        c,
+        568,
+        122,
+        &format!(
+            "{} / {} MiB",
+            settings.model.short_label(),
+            settings.ram_mib
+        ),
+        MUTED,
+    )?;
     if o.dirty(settings) {
         text(c, 696, 122, "Unsaved changes", Color::RGB(255, 208, 128))?;
     }
@@ -447,7 +467,7 @@ fn draw_overlay(
             for (i, line) in [
                 concat!("Heliacal ", env!("CARGO_PKG_VERSION"), " / Happy Years"),
                 "Native Rust + SDL3 frontend for the Helios SPARC emulator.",
-                "Sun SPARCstation 5 / sun4m / SPARC V8 / 128 MiB RAM.",
+                "Sun SPARCstation 5/20 / Axil 320 / sun4m / SPARC V8 / 128 MiB RAM.",
                 "Interface conventions follow Prismatic and the Happy Years family.",
                 "Sun Type 5 US keyboard: Pause + A sends Stop-A.",
                 "Guest mouse is connected after capture; audio is not.",

@@ -48,11 +48,85 @@ pub struct ScsiTarget {
     pub path: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Model {
     #[default]
     Sparcstation5,
+    Sparcstation20,
+    Axil320,
+}
+
+impl Model {
+    pub const ALL: [Self; 3] = [Self::Sparcstation5, Self::Sparcstation20, Self::Axil320];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 => "Sun SPARCstation 5",
+            Self::Sparcstation20 => "Sun SPARCstation 20",
+            Self::Axil320 => "Axil 320",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 => "SS-5",
+            Self::Sparcstation20 => "SS-20",
+            Self::Axil320 => "Axil 320",
+        }
+    }
+
+    pub fn processor(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 => "microSPARC-II / 85 MHz",
+            Self::Sparcstation20 => "SuperSPARC-compatible / single processor",
+            Self::Axil320 => "SuperSPARC 390Z55-compatible / single processor",
+        }
+    }
+
+    pub fn graphics(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 => "TurboGX / CGsix / 1152 x 900",
+            Self::Sparcstation20 => "SX / VSIMM (CG14), optional TurboGX",
+            Self::Axil320 => "TurboGX / CGsix / SBus slot 2",
+        }
+    }
+
+    pub fn graphics_short(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 | Self::Axil320 => "CGsix",
+            Self::Sparcstation20 => "SX/CG14",
+        }
+    }
+
+    pub fn prom_label(self) -> &'static str {
+        match self {
+            Self::Sparcstation5 => "Sun SS-5 PROM",
+            Self::Sparcstation20 => "Sun SS-20 PROM",
+            Self::Axil320 => "Axil 320 PROM",
+        }
+    }
+
+    pub fn profile(self) -> helios::machine::MachineProfile {
+        match self {
+            Self::Sparcstation5 => helios::machine::MachineProfile::Ss5,
+            Self::Sparcstation20 => helios::machine::MachineProfile::Ss20,
+            Self::Axil320 => helios::machine::MachineProfile::Axil320,
+        }
+    }
+
+    pub fn default_nvram(self) -> helios::devices::nvram::Nvram {
+        self.profile().default_nvram()
+    }
+
+    pub fn requires_cgsix(self) -> bool {
+        !matches!(self, Self::Sparcstation20)
+    }
+
+    pub fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|model| *model == self).unwrap();
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,7 +215,7 @@ impl Settings {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.ram_mib != RAM_MIB {
-            return Err("This release supports only SPARCstation 5 with 128 MiB RAM".into());
+            return Err("This release supports 128 MiB RAM on SS-5, SS-20 and Axil 320".into());
         }
         Ok(())
     }
@@ -210,7 +284,8 @@ impl Settings {
     }
 
     pub fn hardware_eq(&self, other: &Self) -> bool {
-        self.prom == other.prom
+        self.model == other.model
+            && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
             && self.scsi == other.scsi
             && self.disk_read_only == other.disk_read_only
@@ -304,6 +379,19 @@ mod tests {
         assert!(!missing.disk_read_only);
         let read_only: Settings = toml::from_str("disk_read_only = true").unwrap();
         assert!(read_only.disk_read_only);
+    }
+    #[test]
+    fn machine_models_roundtrip_and_cycle() {
+        assert_eq!(Model::default(), Model::Sparcstation5);
+        assert_eq!(Model::Sparcstation5.next(), Model::Sparcstation20);
+        assert_eq!(Model::Sparcstation20.next(), Model::Axil320);
+        assert_eq!(Model::Axil320.next(), Model::Sparcstation5);
+        let s: Settings = toml::from_str("model = 'axil320'").unwrap();
+        assert_eq!(s.model, Model::Axil320);
+        assert_eq!(s.model.profile(), helios::machine::MachineProfile::Axil320);
+        assert!(s.model.requires_cgsix());
+        assert!(!Model::Sparcstation20.requires_cgsix());
+        assert!(!s.hardware_eq(&Settings::default()));
     }
     #[test]
     fn unsupported_hardware_is_rejected() {

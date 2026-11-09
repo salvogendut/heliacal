@@ -24,6 +24,7 @@ impl Tab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     Fixed,
+    Model,
     Prom,
     Rom,
     Scsi(usize),
@@ -72,15 +73,23 @@ impl Overlay {
     pub fn rows(&self) -> Vec<Row> {
         match self.tab {
             Tab::General => vec![
-                ("Machine", "Sun SPARCstation 5".into(), Field::Fixed),
-                ("Processor", "microSPARC-II / 85 MHz".into(), Field::Fixed),
-                ("Memory", "128 MiB".into(), Field::Fixed),
+                ("Machine", self.draft.model.label().into(), Field::Model),
                 (
-                    "Graphics",
-                    "TurboGX / CGsix / 1152 x 900".into(),
+                    "Processor",
+                    self.draft.model.processor().into(),
                     Field::Fixed,
                 ),
-                ("Sun SS-5 PROM", path_label(&self.draft.prom), Field::Prom),
+                (
+                    "Memory",
+                    format!("{} MiB", self.draft.ram_mib),
+                    Field::Fixed,
+                ),
+                ("Graphics", self.draft.model.graphics().into(), Field::Fixed),
+                (
+                    self.draft.model.prom_label(),
+                    path_label(&self.draft.prom),
+                    Field::Prom,
+                ),
                 (
                     "TurboGX FCode ROM",
                     path_label(&self.draft.cgsix_rom),
@@ -187,6 +196,7 @@ impl Overlay {
     }
     pub fn activate(&mut self) {
         match self.field() {
+            Field::Model => self.draft.model = self.draft.model.next(),
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
@@ -286,6 +296,22 @@ mod tests {
         assert!(overlay.tabs().contains(&Tab::Advanced));
         overlay.draft.tinker = true;
         assert!(overlay.tabs().contains(&Tab::Advanced));
+    }
+    #[test]
+    fn machine_row_cycles_the_draft_model_without_touching_live_settings() {
+        let settings = Settings::default();
+        let mut o = Overlay::new(&settings);
+        o.selected = 0;
+        assert_eq!(o.field(), Field::Model);
+        o.activate();
+        assert_eq!(o.draft.model, crate::settings::Model::Sparcstation20);
+        assert_eq!(settings.model, crate::settings::Model::Sparcstation5);
+        assert!(o.dirty(&settings));
+        o.activate();
+        assert_eq!(o.draft.model, crate::settings::Model::Axil320);
+        o.activate();
+        assert_eq!(o.draft.model, crate::settings::Model::Sparcstation5);
+        assert!(!o.dirty(&settings));
     }
     #[test]
     fn tabs_have_no_save_rows_and_empty_tabs_navigate_safely() {

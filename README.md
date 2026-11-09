@@ -7,9 +7,11 @@ Heliacal is a native **Rust/SDL3 Happy Years frontend** for the sibling
 Happy Years family: the guest display owns the window, **F9** opens options,
 and a status strip plus machine activity LEDs keep the essential state visible.
 
-The initial machine is fixed at **Sun SPARCstation 5 / sun4m**, with an
-**85 MHz microSPARC-II**, **128 MiB RAM**, **TurboGX (CGsix) graphics**, and a
-**Sun Type 5 US keyboard**. Other machines and RAM sizes are not selectable.
+The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
+or **Axil 320**. All three use sun4m, **128 MiB RAM**, and a **Sun Type 5 US
+keyboard**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus card (slot 1 and
+slot 2 respectively); SS-20 also has its built-in **SX (CG14)** VSIMM and can
+optionally use a TurboGX. RAM sizes are not selectable.
 
 ## Build and run
 
@@ -33,18 +35,28 @@ make
 cargo run --release --locked
 ```
 
-The application opens **paused**. Select your original Sun SS-5 PROM and
-32 KiB TurboGX FCode ROM under **F9 > General**, save with **F9**, and press
-**Ctrl+P** to boot. Firmware and guest operating systems are not bundled.
-The Helios repository documents firmware acquisition and expected hashes.
+The application opens **paused**. Choose the machine and its original Sun PROM
+under **F9 > General**; choose the 32 KiB TurboGX FCode ROM for SS-5/Axil 320
+(or optionally for SS-20). Save with **F9** and press **Ctrl+P** to boot.
+Firmware and guest operating systems are not bundled. The Helios repository
+documents firmware acquisition and expected hashes.
 
-You can also supply paths for this session:
+You can also select the machine and supply paths for this session:
 
 ```sh
-./target/release/heliacal \
+./target/release/heliacal --machine ss5 \
   --prom ../helios/local/firmware/sun-ss5.bin \
   --cgsix-rom ../helios/local/firmware/turbogx.bin
+./target/release/heliacal --machine ss20 \
+  --prom ../helios/local/firmware/ss10-20-v2.25r-rom \
+  --cgsix-rom ../helios/local/firmware/turbogx.bin
+./target/release/heliacal --machine axil320 \
+  --prom ../helios/local/firmware/axil320-2-19.bin \
+  --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
+
+Without a TurboGX ROM, SS-20 can use its built-in SX; SS-5 and Axil 320 require
+a TurboGX ROM for a guest display.
 
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
@@ -122,9 +134,11 @@ The early `disk`/`cdrom` config fields migrate to targets 3/6 on load.
 `network = true` enables the user-mode NAT (default on). See
 [the example configuration](heliacal.cfg.example).
 
-NVRAM is loaded from and atomically saved to `<config-path>.nvram`; the lock
-file is `<config-path>.lock`. Concurrent instances cannot use the same config
-and NVRAM. Choose a different config for another workstation instance. Keep
+NVRAM is loaded from and atomically saved per machine: `<config-path>.nvram`
+for SS-5, `<config-path>.nvram.ss20` for SS-20, and
+`<config-path>.nvram.axil320` for Axil 320. The lock file is
+`<config-path>.lock`. Concurrent instances cannot use the same config.
+Choose a different config for another workstation instance. Keep
 firmware/disks under ignored `local/` if storing them in this repository.
 
 Fresh NVRAM lets OBP initialize its defaults. The initial checksum message is

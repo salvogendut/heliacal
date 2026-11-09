@@ -6,9 +6,10 @@
 - The emulator is the sibling `../helios` library. Inspect its current APIs
   before integrating. Keep CPU/device changes there; read its AGENTS.md and
   relevant architecture documentation before changing the core.
-- Initially support only Sun SPARCstation 5 / microSPARC-II at 85 MHz with
-  128 MiB RAM and TurboGX. Validate this in configuration and construction;
-  do not expose unimplemented machine or peripheral controls.
+- Support Sun SPARCstation 5, SPARCstation 20 and Axil 320 at 128 MiB RAM.
+  Map the selected model to a Helios `MachineProfile`; SS-5/Axil use a
+  TurboGX SBus card, while SS-20 has built-in SX and optional TurboGX. Validate
+  hardware combinations in construction and keep per-machine NVRAM separate.
 - Keep SDL window/render/event work on the main thread and machine work on
   the worker. Bound input and display handoffs. Guest time must not depend
   on UI presentation or refresh rate.

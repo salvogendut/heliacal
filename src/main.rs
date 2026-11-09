@@ -14,7 +14,7 @@ use sdl3::{
     pixels::PixelFormat,
     render::ScaleMode,
 };
-use settings::{ScsiTarget, Settings, TargetKind};
+use settings::{Model, ScsiTarget, Settings, TargetKind};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -63,6 +63,7 @@ const MEDIA_FILTERS: [DialogFileFilter<'static>; 2] = [
 #[derive(Default)]
 struct Options {
     config: Option<PathBuf>,
+    machine: Option<Model>,
     prom: Option<String>,
     rom: Option<String>,
     disk: Option<String>,
@@ -79,7 +80,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5 / microSPARC-II 85 MHz / 128 MiB RAM / TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--prom PATH] [--cgsix-rom PATH] [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 uses its built-in SX; SS-5 and Axil 320 use a TurboGX SBus card.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -88,6 +89,20 @@ impl Options {
                     return Ok(None);
                 }
                 "--config" => o.config = Some(args.next().ok_or("--config needs a path")?.into()),
+                "--machine" => {
+                    let value = args.next().ok_or("--machine needs ss5, ss20 or axil320")?;
+                    o.machine = Some(match value.as_str() {
+                        "ss5" => Model::Sparcstation5,
+                        "ss20" => Model::Sparcstation20,
+                        "axil320" => Model::Axil320,
+                        _ => {
+                            return Err(format!(
+                                "Unknown machine {value}; use ss5, ss20 or axil320"
+                            )
+                            .into());
+                        }
+                    });
+                }
                 "--prom" => o.prom = Some(args.next().ok_or("--prom needs a path")?),
                 "--cgsix-rom" => o.rom = Some(args.next().ok_or("--cgsix-rom needs a path")?),
                 "--disk" => o.disk = Some(args.next().ok_or("--disk needs a path")?),
@@ -426,6 +441,9 @@ fn run(options: Options) -> Result<()> {
     if testing {
         settings = settings.resolve(source_config.parent().unwrap());
     }
+    if let Some(model) = options.machine {
+        settings.model = model;
+    }
     for (dest, source) in [
         (&mut settings.prom, options.prom),
         (&mut settings.cgsix_rom, options.rom),
@@ -466,7 +484,7 @@ fn run(options: Options) -> Result<()> {
     let video = sdl.video()?;
     let mut window = video
         .window(
-            "Heliacal - Happy Years / Sun SPARCstation 5",
+            &format!("Heliacal - Happy Years / {}", app.settings.model.label()),
             view::WIDTH,
             view::HEIGHT,
         )
@@ -510,6 +528,10 @@ fn run(options: Options) -> Result<()> {
     }
     loop {
         let frame_started = Instant::now();
+        let title = format!("Heliacal - Happy Years / {}", app.settings.model.label());
+        if canvas.window().title() != title {
+            canvas.window_mut().set_title(&title)?;
+        }
         for event in events.poll_iter() {
             match event {
                 Event::Quit { .. } => app.ask(Confirm::Quit),

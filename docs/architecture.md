@@ -16,7 +16,8 @@ preferences; F9 saves it, and closing a dirty draft prompts Save/Discard/Cancel.
 `emulator.rs` owns `Machine` on one worker thread. Construction and image
 loading happen there. A bounded command channel controls boot/pause/shutdown.
 A failed replacement leaves the existing machine and its run/pause state
-intact. Successful cold replacement uses the current machine's NVRAM.
+intact. Successful cold replacement reuses NVRAM only when the model is unchanged;
+otherwise it saves the old model's state and loads the new model's file.
 
 The worker advances guest time only through `Machine::step`. It publishes one
 latest immutable RGBA framebuffer and a small status snapshot, at most about
@@ -38,13 +39,16 @@ Host mouse events navigate the frontend until capture. While captured, relative
 motion and left/middle/right buttons are queued as Sun Mouse Systems packets on
 SCC channel B; focus loss and capture release send button releases.
 
-`settings.rs` serializes a strict TOML schema, validates the sole machine and
-RAM size, and validates configured image sizes/readability and read/write
-disk access on save. Empty firmware paths are valid for an unconfigured
-desktop; Boot reports what's missing. Paths are resolved relative to the config
+`settings.rs` serializes a strict TOML schema and selects SS-5, SS-20 or Axil
+320 at 128 MiB RAM. The model maps to a Helios `MachineProfile`; SS-5/Axil
+require a TurboGX card ROM, while SS-20 always has SX and may additionally use
+TurboGX. Configured image sizes/readability and read/write disk access are
+validated on save. Empty firmware paths are valid for an unconfigured desktop;
+Boot reports what's missing. Paths are resolved relative to the config
 directory. Saving uses a synced temporary file in the destination directory and
-an atomic rename.
-An OS file lock prevents two instances sharing a config/NVRAM file.
+an atomic rename. An OS file lock prevents two instances sharing a config/NVRAM
+file. NVRAM is separated per model (`<config>.nvram`, `.nvram.ss20`,
+`.nvram.axil320`) so changing machines starts with the correct IDPROM identity.
 
 Normal shutdown saves NVRAM on the worker. If saving fails, the window stays
 open, the machine remains available, and a running guest is paused for retry.

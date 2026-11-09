@@ -1,7 +1,9 @@
+# "sparcstation5", "sparcstation20", or "axil320"
 model = "sparcstation5"
 ram_mib = 128
 # Paths are relative to this config's directory. Select your own ROMs in F9.
 prom = ""
+# Required for SS-5 and Axil 320; optional for SS-20 (SX fallback).
 cgsix_rom = ""
 smoothing = false
 scanlines = false

@@ -1,4 +1,6 @@
-use crate::settings::{RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write};
+use crate::settings::{
+    Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write, companion_path,
+};
 use helios::{
     devices::{
         cgsix::{Cgsix, HEIGHT, WIDTH},
@@ -230,19 +232,26 @@ fn read_rom(path: &str, label: &str, max: usize) -> Result<Vec<u8>, String> {
 
 fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     settings.validate()?;
+    let profile = settings.model.profile();
     let prom = read_rom(
         &settings.prom,
-        "Sun SS-5 PROM",
+        settings.model.prom_label(),
         helios::machine::MAX_PROM_BYTES,
     )?;
-    let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
-    let graphics = Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?;
-    let mut machine = Machine::ss5_with_nvram(RAM_MIB as usize * 1024 * 1024, &prom, nvram)
+    let mut machine = Machine::with_profile(profile, RAM_MIB as usize * 1024 * 1024, &prom, nvram)
         .map_err(|e| e.to_string())?;
-    machine
-        .bus
-        .install_cgsix(graphics)
-        .map_err(|e| e.to_string())?;
+    if settings.cgsix_rom.is_empty() {
+        if settings.model.requires_cgsix() {
+            return Err(format!(
+                "Select a TurboGX FCode ROM for {} in F9 > General before booting",
+                settings.model.label()
+            ));
+        }
+    } else {
+        let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
+        let graphics = Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?;
+        machine.install_cgsix(graphics).map_err(|e| e.to_string())?;
+    }
     let devices = machine.bus.devices_mut().unwrap();
     devices.keyboard = Some(Keyboard::default());
     for (id, target) in settings.scsi.iter().enumerate() {
@@ -291,12 +300,49 @@ fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: 
     network.stats().guest_frames + network.stats().host_frames
 }
 
-fn load_nvram(path: &Path) -> Result<Nvram, String> {
+fn load_nvram(path: &Path, model: Model) -> Result<Nvram, String> {
     match fs::read(path) {
         Ok(bytes) => Nvram::from_image(&bytes).map_err(|e| format!("{}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Nvram::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(model.default_nvram()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+fn nvram_path_for(base: &Path, model: Model) -> PathBuf {
+    match model {
+        Model::Sparcstation5 => base.to_path_buf(),
+        Model::Sparcstation20 => companion_path(base, ".ss20"),
+        Model::Axil320 => companion_path(base, ".axil320"),
+    }
+}
+
+fn blit_pixels(
+    state: &mut Snapshot,
+    frame_cache: &mut FrameCache,
+    scanout: u64,
+    draw: impl FnOnce(&mut [u32]),
+) {
+    if frame_cache.scanout == Some(scanout) {
+        return;
+    }
+    if frame_cache.pixels.len() != WIDTH * HEIGHT {
+        frame_cache.pixels.resize(WIDTH * HEIGHT, 0);
+    }
+    draw(&mut frame_cache.pixels);
+    let rgba = Arc::make_mut(&mut state.pixels);
+    if rgba.len() != WIDTH * HEIGHT * 4 {
+        rgba.resize(WIDTH * HEIGHT * 4, 0);
+    }
+    for (chunk, pixel) in rgba
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(&frame_cache.pixels)
+    {
+        chunk.copy_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8, 255]);
+    }
+    frame_cache.scanout = Some(scanout);
+    state.frame += 1;
 }
 
 fn publish(
@@ -305,27 +351,14 @@ fn publish(
     shared: &Mutex<Snapshot>,
     frame_cache: &mut FrameCache,
 ) {
-    let cgsix = machine.bus.cgsix().unwrap();
-    let scanout = cgsix.scanout_key();
-    if frame_cache.scanout != Some(scanout) {
-        if frame_cache.pixels.len() != WIDTH * HEIGHT {
-            frame_cache.pixels.resize(WIDTH * HEIGHT, 0);
-        }
-        cgsix.pixels(&mut frame_cache.pixels);
-        let rgba = Arc::make_mut(&mut state.pixels);
-        if rgba.len() != WIDTH * HEIGHT * 4 {
-            rgba.resize(WIDTH * HEIGHT * 4, 0);
-        }
-        for (chunk, pixel) in rgba
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(&frame_cache.pixels)
-        {
-            chunk.copy_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8, 255]);
-        }
-        frame_cache.scanout = Some(scanout);
-        state.frame += 1;
+    if let Some(cgsix) = machine.bus.cgsix() {
+        blit_pixels(state, frame_cache, cgsix.scanout_key(), |pixels| {
+            cgsix.pixels(pixels)
+        });
+    } else if let Some(sx) = machine.bus.sx() {
+        blit_pixels(state, frame_cache, sx.generation() ^ (1 << 63), |pixels| {
+            sx.pixels(pixels)
+        });
     }
     state.pc = machine.cpu.pc();
     state.scsi_activity = std::array::from_fn(|id| {
@@ -345,9 +378,11 @@ fn run(
     shared: Arc<Mutex<Snapshot>>,
     input: Arc<Mutex<Input>>,
     abort: Arc<AtomicBool>,
-    nvram_path: &Path,
+    nvram_base: &Path,
 ) {
     let mut machine: Option<Machine> = None;
+    let mut current_model: Option<Model> = None;
+    let mut nvram_path = nvram_base.to_path_buf();
     let mut network: Option<NatEngine> = None;
     let mut state = Snapshot::default();
     let mut frame_at = Instant::now();
@@ -370,7 +405,7 @@ fn run(
                 Command::Shutdown => {
                     if let Some(m) = &machine
                         && let Err(error) =
-                            atomic_write(nvram_path, &m.bus.devices().unwrap().nvram.image())
+                            atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())
                     {
                         state.error = Some(error);
                         state.shutdown_failed = true;
@@ -395,13 +430,24 @@ fn run(
                 Command::Boot(settings) => {
                     let old_phase = state.phase;
                     shared.lock().unwrap().phase = Phase::Loading;
-                    let nvram = match &machine {
-                        Some(m) => Ok(m.bus.devices().unwrap().nvram.clone()),
-                        None => load_nvram(nvram_path),
-                    };
+                    let target_path = nvram_path_for(nvram_base, settings.model);
+                    let nvram = (|| {
+                        if let (Some(m), Some(old_model)) = (&machine, current_model) {
+                            if old_model == settings.model {
+                                return Ok(m.bus.devices().unwrap().nvram.clone());
+                            }
+                            atomic_write(
+                                &nvram_path_for(nvram_base, old_model),
+                                &m.bus.devices().unwrap().nvram.image(),
+                            )?;
+                        }
+                        load_nvram(&target_path, settings.model)
+                    })();
                     match nvram.and_then(|n| build(&settings, n)) {
                         Ok(new) => {
                             machine = Some(new);
+                            current_model = Some(settings.model);
+                            nvram_path = target_path;
                             network = settings
                                 .network
                                 .then(|| NatEngine::new(NatConfig::default()));
@@ -506,7 +552,7 @@ fn run(
     }
     if let Some(m) = machine {
         if !saved
-            && let Err(error) = atomic_write(nvram_path, &m.bus.devices().unwrap().nvram.image())
+            && let Err(error) = atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())
         {
             eprintln!("{error}");
             state.error = Some(error);
@@ -523,6 +569,57 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn per_machine_nvram_paths_and_defaults_are_distinct() {
+        use crate::settings::Model;
+        let base = Path::new("/tmp/heliacal.cfg.nvram");
+        assert_eq!(nvram_path_for(base, Model::Sparcstation5), base);
+        assert_eq!(
+            nvram_path_for(base, Model::Sparcstation20),
+            Path::new("/tmp/heliacal.cfg.nvram.ss20")
+        );
+        assert_eq!(
+            nvram_path_for(base, Model::Axil320),
+            Path::new("/tmp/heliacal.cfg.nvram.axil320")
+        );
+        let ss5 = Model::Sparcstation5.default_nvram().image();
+        let axil = Model::Axil320.default_nvram().image();
+        assert_ne!(&ss5[0x1fd8..0x1fe8], &axil[0x1fd8..0x1fe8]);
+    }
+    #[test]
+    fn machine_models_choose_the_expected_firmware_and_graphics() {
+        use crate::settings::Model;
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        let rom = dir.path().join("rom");
+        fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
+        fs::write(&rom, vec![0; 32768]).unwrap();
+        let base = Settings {
+            prom: prom.display().to_string(),
+            cgsix_rom: rom.display().to_string(),
+            ..Settings::default()
+        };
+        let ss20 = Settings {
+            model: Model::Sparcstation20,
+            cgsix_rom: String::new(),
+            ..base.clone()
+        };
+        let machine = build(&ss20, Nvram::default()).unwrap();
+        assert!(machine.bus.sx().is_some());
+        assert!(machine.bus.cgsix().is_none());
+        let ss20_gx = Settings {
+            model: Model::Sparcstation20,
+            ..base.clone()
+        };
+        let machine = build(&ss20_gx, Nvram::default()).unwrap();
+        assert!(machine.bus.sx().is_some() && machine.bus.cgsix().is_some());
+        let axil = Settings {
+            model: Model::Axil320,
+            ..base
+        };
+        let machine = build(&axil, Nvram::default()).unwrap();
+        assert!(machine.bus.sx().is_none() && machine.bus.cgsix().is_some());
+    }
     #[test]
     fn all_seven_scsi_ids_honor_the_selected_access_mode() {
         use crate::settings::{ScsiTarget, TargetKind};
