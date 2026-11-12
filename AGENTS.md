@@ -7,10 +7,10 @@
   before integrating. Keep CPU/device changes there; read its AGENTS.md and
   relevant architecture documentation before changing the core.
 - Support Sun SPARCstation 5, SPARCstation 20 and Axil 320 at 128 MiB RAM.
-  Map the selected model to a Helios `MachineProfile`; all three expose a
-  TurboGX SBus card for the guest display. The SS-20 SX core remains available
-  in Helios but lacks a usable firmware console path. Validate hardware
-  combinations in construction and keep per-machine NVRAM separate.
+  Map the selected model to a Helios `MachineProfile`. SS-20 offers native
+  SX/CG14 or a TurboGX SBus card; SS-5 and Axil 320 require TurboGX. Validate
+  the model/display combination in construction and keep per-machine NVRAM
+  separate.
 - Keep SDL window/render/event work on the main thread and machine work on
   the worker. Bound input and display handoffs. Guest time must not depend
   on UI presentation or refresh rate.

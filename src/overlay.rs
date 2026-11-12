@@ -1,4 +1,4 @@
-use crate::settings::{Settings, TargetKind};
+use crate::settings::{Display, Settings, TargetKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -25,6 +25,7 @@ impl Tab {
 pub enum Field {
     Fixed,
     Model,
+    Display,
     Prom,
     Rom,
     Scsi(usize),
@@ -56,7 +57,7 @@ impl Overlay {
         Self {
             draft: settings.clone(),
             tab: Tab::General,
-            selected: 4,
+            selected: 5,
             edit: None,
         }
     }
@@ -84,7 +85,12 @@ impl Overlay {
                     format!("{} MiB", self.draft.ram_mib),
                     Field::Fixed,
                 ),
-                ("Graphics", self.draft.model.graphics().into(), Field::Fixed),
+                (
+                    "Graphics",
+                    self.draft.model.graphics(self.draft.display).into(),
+                    Field::Fixed,
+                ),
+                ("Display", self.draft.display.label().into(), Field::Display),
                 (
                     self.draft.model.prom_label(),
                     path_label(&self.draft.prom),
@@ -196,7 +202,17 @@ impl Overlay {
     }
     pub fn activate(&mut self) {
         match self.field() {
-            Field::Model => self.draft.model = self.draft.model.next(),
+            Field::Model => {
+                self.draft.model = self.draft.model.next();
+                if !self.draft.model.supports_sx() {
+                    self.draft.display = Display::Cgsix;
+                }
+            }
+            Field::Display => {
+                if self.draft.model.supports_sx() {
+                    self.draft.display = self.draft.display.next();
+                }
+            }
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
@@ -312,6 +328,10 @@ mod tests {
         o.activate();
         assert_eq!(o.draft.model, crate::settings::Model::Sparcstation5);
         assert!(!o.dirty(&settings));
+        o.selected = 4;
+        assert_eq!(o.field(), Field::Display);
+        o.activate();
+        assert_eq!(o.draft.display, Display::Cgsix);
     }
     #[test]
     fn tabs_have_no_save_rows_and_empty_tabs_navigate_safely() {

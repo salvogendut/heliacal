@@ -50,6 +50,30 @@ pub struct ScsiTarget {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum Display {
+    #[default]
+    Cgsix,
+    Sx,
+}
+
+impl Display {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cgsix => "TurboGX / CGsix",
+            Self::Sx => "Native SX / CG14",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Cgsix => Self::Sx,
+            Self::Sx => Self::Cgsix,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Model {
     #[default]
     Sparcstation5,
@@ -79,21 +103,25 @@ impl Model {
     pub fn processor(self) -> &'static str {
         match self {
             Self::Sparcstation5 => "microSPARC-II / 85 MHz",
-            Self::Sparcstation20 => "SuperSPARC-compatible / single processor",
-            Self::Axil320 => "SuperSPARC 390Z55-compatible / single processor",
+            Self::Sparcstation20 => "SuperSPARC-II / single processor",
+            Self::Axil320 => "SuperSPARC 390Z55 / single processor",
         }
     }
 
-    pub fn graphics(self) -> &'static str {
-        match self {
-            Self::Sparcstation5 => "TurboGX / CGsix / 1152 x 900",
-            Self::Sparcstation20 => "TurboGX / CGsix / SBus slot 2",
-            Self::Axil320 => "TurboGX / CGsix / SBus slot 2",
+    pub fn graphics(self, display: Display) -> &'static str {
+        match (self, display) {
+            (Self::Sparcstation20, Display::Sx) => "SX / CG14 / 1152 x 900",
+            (Self::Sparcstation20, Display::Cgsix) => "TurboGX / CGsix / SBus slot 2",
+            (_, Display::Cgsix) => "TurboGX / CGsix / 1152 x 900",
+            (_, Display::Sx) => "SX / CG14 / 1152 x 900",
         }
     }
 
-    pub fn graphics_short(self) -> &'static str {
-        "CGsix"
+    pub fn graphics_short(self, display: Display) -> &'static str {
+        match display {
+            Display::Cgsix => "CGsix",
+            Display::Sx => "SX/CG14",
+        }
     }
 
     pub fn prom_label(self) -> &'static str {
@@ -116,10 +144,8 @@ impl Model {
         self.profile().default_nvram()
     }
 
-    /// Heliacal uses CG6 for every exposed machine: the core SX is present
-    /// for SS-20 but its guest console path is not yet usable.
-    pub fn requires_cgsix(self) -> bool {
-        true
+    pub fn supports_sx(self) -> bool {
+        matches!(self, Self::Sparcstation20)
     }
 
     pub fn next(self) -> Self {
@@ -132,6 +158,7 @@ impl Model {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub model: Model,
+    pub display: Display,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -148,6 +175,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             model: Model::Sparcstation5,
+            display: Display::Cgsix,
             ram_mib: RAM_MIB,
             prom: String::new(),
             cgsix_rom: String::new(),
@@ -215,6 +243,12 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.ram_mib != RAM_MIB {
             return Err("This release supports 128 MiB RAM on SS-5, SS-20 and Axil 320".into());
+        }
+        if self.display == Display::Sx && !self.model.supports_sx() {
+            return Err(format!(
+                "{} does not have a native SX display",
+                self.model.label()
+            ));
         }
         Ok(())
     }
@@ -284,6 +318,7 @@ impl Settings {
 
     pub fn hardware_eq(&self, other: &Self) -> bool {
         self.model == other.model
+            && self.display == other.display
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
             && self.scsi == other.scsi
@@ -387,9 +422,24 @@ mod tests {
         assert_eq!(Model::Axil320.next(), Model::Sparcstation5);
         let s: Settings = toml::from_str("model = 'axil320'").unwrap();
         assert_eq!(s.model, Model::Axil320);
+        assert_eq!(s.display, Display::Cgsix);
+        assert_eq!(
+            toml::from_str::<Settings>("display = 'sx'")
+                .unwrap()
+                .display,
+            Display::Sx
+        );
+        assert!(
+            Settings {
+                display: Display::Sx,
+                ..Settings::default()
+            }
+            .validate()
+            .is_err()
+        );
         assert_eq!(s.model.profile(), helios::machine::MachineProfile::Axil320);
-        assert!(s.model.requires_cgsix());
-        assert!(Model::Sparcstation20.requires_cgsix());
+        assert!(!s.model.supports_sx());
+        assert!(Model::Sparcstation20.supports_sx());
         assert!(!s.hardware_eq(&Settings::default()));
     }
     #[test]

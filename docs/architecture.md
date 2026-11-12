@@ -40,9 +40,10 @@ motion and left/middle/right buttons are queued as Sun Mouse Systems packets on
 SCC channel B; focus loss and capture release send button releases.
 
 `settings.rs` serializes a strict TOML schema and selects SS-5, SS-20 or Axil
-320 at 128 MiB RAM. The model maps to a Helios `MachineProfile`; all three
-require a TurboGX card ROM. SS-20's SX core exists in Helios but is not yet a
-usable firmware console, so the frontend removes it for display. Configured image sizes/readability and read/write disk access are
+320 at 128 MiB RAM. The model maps to a Helios `MachineProfile`. SS-20 exposes
+a display choice: native SX/CG14 (no TurboGX ROM) or a TurboGX SBus card.
+SS-5 and Axil 320 require TurboGX. Selecting CG6 on SS-20 removes the SX device
+so the firmware uses the SBus card. Configured image sizes/readability and read/write disk access are
 validated on save. Empty firmware paths are valid for an unconfigured desktop;
 Boot reports what's missing. Paths are resolved relative to the config
 directory. Saving uses a synced temporary file in the destination directory and

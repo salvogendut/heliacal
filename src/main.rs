@@ -14,7 +14,7 @@ use sdl3::{
     pixels::PixelFormat,
     render::ScaleMode,
 };
-use settings::{Model, ScsiTarget, Settings, TargetKind};
+use settings::{Display, Model, ScsiTarget, Settings, TargetKind};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -64,6 +64,7 @@ const MEDIA_FILTERS: [DialogFileFilter<'static>; 2] = [
 struct Options {
     config: Option<PathBuf>,
     machine: Option<Model>,
+    display: Option<Display>,
     prom: Option<String>,
     rom: Option<String>,
     disk: Option<String>,
@@ -80,7 +81,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--prom PATH] [--cgsix-rom PATH] [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 uses its built-in SX; SS-5 and Axil 320 use a TurboGX SBus card.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -101,6 +102,14 @@ impl Options {
                             )
                             .into());
                         }
+                    });
+                }
+                "--display" => {
+                    let value = args.next().ok_or("--display needs cgsix or sx")?;
+                    o.display = Some(match value.as_str() {
+                        "cgsix" => Display::Cgsix,
+                        "sx" => Display::Sx,
+                        _ => return Err(format!("Unknown display {value}; use cgsix or sx").into()),
                     });
                 }
                 "--prom" => o.prom = Some(args.next().ok_or("--prom needs a path")?),
@@ -443,6 +452,9 @@ fn run(options: Options) -> Result<()> {
     }
     if let Some(model) = options.machine {
         settings.model = model;
+    }
+    if let Some(display) = options.display {
+        settings.display = display;
     }
     for (dest, source) in [
         (&mut settings.prom, options.prom),

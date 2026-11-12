@@ -110,7 +110,11 @@ pub fn draw(
             c,
             336,
             494,
-            &format!("{} MiB RAM  /  {}", p.settings.ram_mib, machine.graphics()),
+            &format!(
+                "{} MiB RAM  /  {}",
+                p.settings.ram_mib,
+                machine.graphics(p.settings.display)
+            ),
             MUTED,
         )?;
         text(
@@ -233,7 +237,7 @@ fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Er
             p.state.phase.label(),
             p.settings.model.short_label(),
             p.settings.ram_mib,
-            p.settings.model.graphics_short(),
+            p.settings.model.graphics_short(p.settings.display),
             if p.settings.network { "on" } else { "off" }
         )
     };

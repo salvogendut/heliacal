@@ -9,10 +9,10 @@ and a status strip plus machine activity LEDs keep the essential state visible.
 
 The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
 or **Axil 320**. All three use sun4m, **128 MiB RAM**, and a **Sun Type 5 US
-keyboard**. All three use a **TurboGX (CGsix)** SBus card (SS-5 slot 1, SS-20/Axil
-slot 2). Helios's SS-20 SX/CG14 core is present but its firmware console path
-is not yet usable, so the frontend does not expose the white SX fallback.
-RAM sizes are not selectable.
+keyboard**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus card. SS-20 can use either
+its native **SX/CG14** framebuffer or a **TurboGX** card; select this with
+**F9 > General > Display** or `--display sx|cgsix`. The native SX option does
+not need a TurboGX ROM. RAM sizes are not selectable.
 
 ## Build and run
 
@@ -36,9 +36,9 @@ make
 cargo run --release --locked
 ```
 
-The application opens **paused**. Choose the machine and its original Sun PROM
-under **F9 > General**; choose the 32 KiB TurboGX FCode ROM for SS-5/Axil 320
-(or optionally for SS-20). Save with **F9** and press **Ctrl+P** to boot.
+The application opens **paused**. Choose the machine, display and original Sun
+PROM under **F9 > General**. TurboGX requires a 32 KiB FCode ROM; native
+SS-20 SX does not. Save with **F9** and press **Ctrl+P** to boot.
 Firmware and guest operating systems are not bundled. The Helios repository
 documents firmware acquisition and expected hashes.
 
@@ -48,15 +48,14 @@ You can also select the machine and supply paths for this session:
 ./target/release/heliacal --machine ss5 \
   --prom ../helios/local/firmware/sun-ss5.bin \
   --cgsix-rom ../helios/local/firmware/turbogx.bin
-./target/release/heliacal --machine ss20 \
-  --prom ../helios/local/firmware/ss10-20-v2.25r-rom \
-  --cgsix-rom ../helios/local/firmware/turbogx.bin
+./target/release/heliacal --machine ss20 --display sx \
+  --prom ../helios/local/firmware/ss10-20-v2.25r-rom
 ./target/release/heliacal --machine axil320 \
   --prom ../helios/local/firmware/axil320-2-19.bin \
   --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
 
-All three machines require a TurboGX ROM for a guest display.
+SS-5 and Axil 320 require a TurboGX ROM. SS-20 with `--display sx` does not.
 
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press

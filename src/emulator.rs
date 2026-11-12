@@ -1,5 +1,5 @@
 use crate::settings::{
-    Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write, companion_path,
+    Display, Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write, companion_path,
 };
 use helios::{
     devices::{
@@ -240,13 +240,18 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     )?;
     let mut machine = Machine::with_profile(profile, RAM_MIB as usize * 1024 * 1024, &prom, nvram)
         .map_err(|e| e.to_string())?;
-    if settings.cgsix_rom.is_empty() {
-        if settings.model.requires_cgsix() {
+    if settings.display == Display::Sx {
+        if !settings.model.supports_sx() {
             return Err(format!(
-                "Select a TurboGX FCode ROM for {} in F9 > General before booting",
+                "{} does not have a native SX display",
                 settings.model.label()
             ));
         }
+    } else if settings.cgsix_rom.is_empty() {
+        return Err(format!(
+            "Select a TurboGX FCode ROM for {} in F9 > General before booting",
+            settings.model.label()
+        ));
     } else {
         let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
         let graphics = Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?;
@@ -604,12 +609,15 @@ mod tests {
         };
         let ss20 = Settings {
             model: Model::Sparcstation20,
+            display: Display::Sx,
             cgsix_rom: String::new(),
             ..base.clone()
         };
-        assert!(build(&ss20, Nvram::default()).is_err());
+        let machine = build(&ss20, Nvram::default()).unwrap();
+        assert!(machine.bus.sx().is_some() && machine.bus.cgsix().is_none());
         let ss20_gx = Settings {
             model: Model::Sparcstation20,
+            display: Display::Cgsix,
             ..base.clone()
         };
         let machine = build(&ss20_gx, Nvram::default()).unwrap();
