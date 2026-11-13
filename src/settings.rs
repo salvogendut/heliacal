@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -157,6 +158,10 @@ impl Model {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_label: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub machines: BTreeMap<String, crate::profiles::NamedMachine>,
     pub model: Model,
     pub display: Display,
     pub ram_mib: u32,
@@ -174,6 +179,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            machine_label: None,
+            machines: BTreeMap::new(),
             model: Model::Sparcstation5,
             display: Display::Cgsix,
             ram_mib: RAM_MIB,
@@ -205,32 +212,20 @@ impl Settings {
                 // disk/CD selections. New saves always use all seven targets.
                 let mut value: toml::Value =
                     toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-                let mut legacy = Vec::new();
-                if let Some(table) = value.as_table_mut() {
-                    for (key, id, kind) in [
-                        ("disk", 3, TargetKind::Disk),
-                        ("cdrom", 6, TargetKind::Cdrom),
-                    ] {
-                        if let Some(value) = table.remove(key) {
-                            let image = value
-                                .as_str()
-                                .ok_or_else(|| format!("{key} must be a path string"))?;
-                            legacy.push((id, kind, image.to_string()));
-                        }
-                    }
-                    if table.contains_key("scsi")
-                        && legacy.iter().any(|(_, _, image)| !image.is_empty())
-                    {
-                        return Err("Use scsi targets or legacy disk/cdrom paths, not both".into());
+                migrate_media(&mut value)?;
+                if let Some(machines) = value
+                    .get_mut("machines")
+                    .and_then(toml::Value::as_table_mut)
+                {
+                    for (_, machine) in machines.iter_mut() {
+                        migrate_media(machine)?;
                     }
                 }
                 let mut settings: Self = value
                     .try_into()
                     .map_err(|e| format!("{}: {e}", path.display()))?;
-                for (id, kind, image) in legacy {
-                    if !image.is_empty() {
-                        settings.scsi[id] = ScsiTarget { kind, path: image };
-                    }
+                if let Some(label) = settings.machine_label.clone() {
+                    settings.select_machine(&label)?;
                 }
                 settings.validate()?;
                 Ok(settings)
@@ -241,6 +236,11 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_hardware()?;
+        self.validate_machines()
+    }
+
+    pub fn validate_hardware(&self) -> Result<(), String> {
         if self.ram_mib != RAM_MIB {
             return Err("This release supports 128 MiB RAM on SS-5, SS-20 and Axil 320".into());
         }
@@ -254,11 +254,13 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        self.validate()?;
-        self.validate_files(path.parent().unwrap_or(Path::new(".")))?;
+        let mut saved = self.clone();
+        saved.remember_machine();
+        saved.validate()?;
+        saved.validate_files(path.parent().unwrap_or(Path::new(".")))?;
         atomic_write(
             path,
-            toml::to_string_pretty(self)
+            toml::to_string_pretty(&saved)
                 .map_err(|e| e.to_string())?
                 .as_bytes(),
         )
@@ -317,7 +319,9 @@ impl Settings {
     }
 
     pub fn hardware_eq(&self, other: &Self) -> bool {
-        self.model == other.model
+        self.machine_label == other.machine_label
+            && self.nvram_path(Path::new("nvram")) == other.nvram_path(Path::new("nvram"))
+            && self.model == other.model
             && self.display == other.display
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
@@ -329,16 +333,59 @@ impl Settings {
     // Paths in a config are relative to that config, not the launch directory.
     pub fn resolve(&self, base: &Path) -> Self {
         let mut settings = self.clone();
-        for path in [&mut settings.prom, &mut settings.cgsix_rom]
+        settings.resolve_paths(base);
+        for machine in settings.machines.values_mut() {
+            machine.resolve(base);
+        }
+        settings
+    }
+
+    pub fn resolve_paths(&mut self, base: &Path) {
+        for path in [&mut self.prom, &mut self.cgsix_rom]
             .into_iter()
-            .chain(settings.scsi.iter_mut().map(|target| &mut target.path))
+            .chain(self.scsi.iter_mut().map(|target| &mut target.path))
         {
             if !path.is_empty() && Path::new(path).is_relative() {
                 *path = base.join(&*path).to_string_lossy().into_owned();
             }
         }
-        settings
     }
+}
+
+// The same short disk/CD spelling works in old configs and named stanzas.
+fn migrate_media(value: &mut toml::Value) -> Result<(), String> {
+    let Some(table) = value.as_table_mut() else {
+        return Ok(());
+    };
+    let mut targets = Settings::default().scsi;
+    let mut has_media = false;
+    for (key, id, kind) in [
+        ("disk", 3, TargetKind::Disk),
+        ("cdrom", 6, TargetKind::Cdrom),
+    ] {
+        if let Some(value) = table.remove(key) {
+            let image = value
+                .as_str()
+                .ok_or_else(|| format!("{key} must be a path string"))?;
+            if !image.is_empty() {
+                targets[id] = ScsiTarget {
+                    kind,
+                    path: image.into(),
+                };
+                has_media = true;
+            }
+        }
+    }
+    if has_media {
+        if table.contains_key("scsi") {
+            return Err("Use scsi targets or legacy disk/cdrom paths, not both".into());
+        }
+        table.insert(
+            "scsi".into(),
+            toml::Value::try_from(targets).map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(())
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {

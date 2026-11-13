@@ -16,8 +16,11 @@ preferences; F9 saves it, and closing a dirty draft prompts Save/Discard/Cancel.
 `emulator.rs` owns `Machine` on one worker thread. Construction and image
 loading happen there. A bounded command channel controls boot/pause/shutdown.
 A failed replacement leaves the existing machine and its run/pause state
-intact. Successful cold replacement reuses NVRAM only when the model is unchanged;
-otherwise it saves the old model's state and loads the new model's file.
+intact. Successful cold replacement reuses NVRAM only when the resolved state
+path is unchanged; switching labels of the same model saves the outgoing
+state and loads the incoming label's file. The published machine name and
+hardware summary change only after successful construction, so saving a
+different selection does not relabel a guest that is still running.
 
 The worker advances guest time only through `Machine::step`. It publishes one
 latest immutable RGBA framebuffer and a small status snapshot, at most about
@@ -50,6 +53,22 @@ directory. Saving uses a synced temporary file in the destination directory and
 an atomic rename. An OS file lock prevents two instances sharing a config/NVRAM
 file. NVRAM is separated per model (`<config>.nvram`, `.nvram.ss20`,
 `.nvram.axil320`) so changing machines starts with the correct IDPROM identity.
+
+`profiles.rs` captures machine settings in the `machines` TOML catalog and
+uses `machine_label` to choose an entry. Model/display, ROMs, SCSI targets,
+disk access and NAT belong to each entry; desktop preferences remain shared.
+The selected stanza is authoritative on load. Save synchronizes the current
+fields into that stanza before validating and atomically publishing the file.
+Cycling labels retains edits within the draft; Save As preserves the source
+entry. The config lock still limits a catalog to one open window.
+
+Unnamed and first-named (`legacy_state`) workstations retain the original
+NVRAM layout. Other labels use `<config>.nvram.machines/<hex-label>/nvram`
+with the existing model suffix. Full byte encoding prevents labels containing
+path separators or differing only in case from colliding. Files are created
+only when firmware state is saved; opening/discarding an options draft has no
+state-file side effects. Separate labels retain their image paths, so copying
+a configuration does not duplicate a disk.
 
 Normal shutdown saves NVRAM on the worker. If saving fails, the window stays
 open, the machine remains available, and a running guest is paused for retry.

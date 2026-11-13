@@ -2,6 +2,7 @@ mod activity;
 mod emulator;
 mod input;
 mod overlay;
+mod profiles;
 mod settings;
 mod view;
 
@@ -63,6 +64,7 @@ const MEDIA_FILTERS: [DialogFileFilter<'static>; 2] = [
 #[derive(Default)]
 struct Options {
     config: Option<PathBuf>,
+    machine_label: Option<String>,
     machine: Option<Model>,
     display: Option<Display>,
     prom: Option<String>,
@@ -81,7 +83,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -90,6 +92,9 @@ impl Options {
                     return Ok(None);
                 }
                 "--config" => o.config = Some(args.next().ok_or("--config needs a path")?.into()),
+                "--machine-label" => {
+                    o.machine_label = Some(args.next().ok_or("--machine-label needs a label")?)
+                }
                 "--machine" => {
                     let value = args.next().ok_or("--machine needs ss5, ss20 or axil320")?;
                     o.machine = Some(match value.as_str() {
@@ -163,14 +168,20 @@ impl App {
         let Some(o) = &mut self.overlay else {
             return;
         };
-        o.finish_edit();
+        if let Err(error) = o.finish_edit() {
+            self.notify(error);
+            return;
+        }
+        o.draft.remember_machine();
         match o.draft.save(&self.config) {
             Ok(()) => {
                 let changed = !self.settings.hardware_eq(&o.draft);
                 self.settings = o.draft.clone();
                 self.overlay = None;
-                self.notify(if changed {
-                    "Settings saved. Firmware, media and disk access apply on the next cold reset (F5)."
+                self.notify(if changed && self.emulator.snapshot().has_machine {
+                    "Settings saved. F5 cold reset applies the selected machine; Ctrl+P resumes the current guest."
+                } else if changed {
+                    "Settings saved. Ctrl+P boots the selected machine."
                 } else {
                     "Settings saved."
                 });
@@ -327,7 +338,7 @@ impl App {
             let o = self.overlay.as_mut().unwrap();
             match key {
                 Scancode::Escape => o.edit = None,
-                Scancode::Return => o.finish_edit(),
+                Scancode::Return => o.finish_edit()?,
                 Scancode::F9 => self.save(),
                 Scancode::Backspace => {
                     o.edit.as_mut().unwrap().pop();
@@ -447,6 +458,9 @@ fn run(options: Options) -> Result<()> {
     } else {
         Settings::load(&source_config)?
     };
+    if let Some(label) = &options.machine_label {
+        settings.select_machine(label)?;
+    }
     if testing {
         settings = settings.resolve(source_config.parent().unwrap());
     }
@@ -496,7 +510,7 @@ fn run(options: Options) -> Result<()> {
     let video = sdl.video()?;
     let mut window = video
         .window(
-            &format!("Heliacal - Happy Years / {}", app.settings.model.label()),
+            &format!("Heliacal - Happy Years / {}", app.settings.machine_name()),
             view::WIDTH,
             view::HEIGHT,
         )
@@ -540,10 +554,6 @@ fn run(options: Options) -> Result<()> {
     }
     loop {
         let frame_started = Instant::now();
-        let title = format!("Heliacal - Happy Years / {}", app.settings.model.label());
-        if canvas.window().title() != title {
-            canvas.window_mut().set_title(&title)?;
-        }
         for event in events.poll_iter() {
             match event {
                 Event::Quit { .. } => app.ask(Confirm::Quit),
@@ -669,6 +679,14 @@ fn run(options: Options) -> Result<()> {
         sdl.mouse()
             .set_relative_mouse_mode(canvas.window(), app.captured);
         let state = app.emulator.snapshot();
+        let name = state
+            .machine_name
+            .clone()
+            .unwrap_or_else(|| app.settings.machine_name());
+        let title = format!("Heliacal - Happy Years / {name}");
+        if canvas.window().title() != title {
+            canvas.window_mut().set_title(&title)?;
+        }
         let mut events = 0;
         if state.phase == Phase::Running && state.steps > last_steps {
             events |= activity::cpu();
@@ -785,12 +803,63 @@ fn run(options: Options) -> Result<()> {
                 app.notice = None;
             }
             if count == 10 {
+                app.key(Scancode::Left, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Left, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.overlay.as_mut().unwrap().edit = Some("Original".into());
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert!(app.settings.machine_label.is_none());
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert_eq!(
+                    Settings::load(&app.config)?.machine_label.as_deref(),
+                    Some("Original")
+                );
+            }
+            if count == 12 {
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                let o = app.overlay.as_mut().unwrap();
+                o.selected = o
+                    .rows()
+                    .iter()
+                    .position(|r| r.field == Field::Model)
+                    .unwrap();
+                o.activate();
+                o.selected = o
+                    .rows()
+                    .iter()
+                    .position(|r| r.field == Field::Display)
+                    .unwrap();
+                o.activate();
+                o.selected = 1;
+                o.activate();
+                o.edit = Some("SS20 Solaris".into());
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                let saved = Settings::load(&app.config)?;
+                assert_eq!(saved.model, Model::Sparcstation20);
+                assert_eq!(saved.display, Display::Sx);
+                assert_eq!(saved.machines["Original"].model, Model::Sparcstation5);
+            }
+            if count == 14 {
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Return, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert_eq!(
+                    app.overlay.as_ref().unwrap().draft.machine_label.as_deref(),
+                    Some("Original")
+                );
+                assert_eq!(app.settings.machine_label.as_deref(), Some("SS20 Solaris"));
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert_eq!(Settings::load(&app.config)?.model, Model::Sparcstation5);
                 assert_eq!(state.phase, Phase::Ready);
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.notice = None;
+            }
+            if count == 16 {
                 if let Some(path) = &options.screenshot {
                     canvas.read_pixels(None)?.save_bmp(path)?;
                 }
                 println!(
-                    "SDL smoke test passed: paused launch, overlay editing, unsaved draft dialog, SCSI targets and saved settings."
+                    "SDL smoke test passed: paused launch, overlay editing, unsaved draft dialog, SCSI targets, named machines and saved settings."
                 );
                 app.emulator.shutdown()?;
                 app.quitting = true;

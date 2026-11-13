@@ -1,6 +1,4 @@
-use crate::settings::{
-    Display, Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write, companion_path,
-};
+use crate::settings::{Display, Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write};
 use helios::{
     devices::{
         cgsix::{Cgsix, HEIGHT, WIDTH},
@@ -57,6 +55,8 @@ pub struct Snapshot {
     pub serial: String,
     pub error: Option<String>,
     pub has_machine: bool,
+    pub machine_name: Option<String>,
+    pub machine_description: Option<String>,
     pub shutdown_failed: bool,
     pub scsi_activity: [(u64, u64); SCSI_TARGETS],
     pub network_activity: u64,
@@ -73,6 +73,8 @@ impl Default for Snapshot {
             serial: String::new(),
             error: None,
             has_machine: false,
+            machine_name: None,
+            machine_description: None,
             shutdown_failed: false,
             scsi_activity: [(0, 0); SCSI_TARGETS],
             network_activity: 0,
@@ -316,14 +318,6 @@ fn load_nvram(path: &Path, model: Model) -> Result<Nvram, String> {
     }
 }
 
-fn nvram_path_for(base: &Path, model: Model) -> PathBuf {
-    match model {
-        Model::Sparcstation5 => base.to_path_buf(),
-        Model::Sparcstation20 => companion_path(base, ".ss20"),
-        Model::Axil320 => companion_path(base, ".axil320"),
-    }
-}
-
 fn blit_pixels(
     state: &mut Snapshot,
     frame_cache: &mut FrameCache,
@@ -389,7 +383,6 @@ fn run(
     nvram_base: &Path,
 ) {
     let mut machine: Option<Machine> = None;
-    let mut current_model: Option<Model> = None;
     let mut nvram_path = nvram_base.to_path_buf();
     let mut network: Option<NatEngine> = None;
     let mut state = Snapshot::default();
@@ -438,29 +431,27 @@ fn run(
                 Command::Boot(settings) => {
                     let old_phase = state.phase;
                     shared.lock().unwrap().phase = Phase::Loading;
-                    let target_path = nvram_path_for(nvram_base, settings.model);
+                    let target_path = settings.nvram_path(nvram_base);
                     let nvram = (|| {
-                        if let (Some(m), Some(old_model)) = (&machine, current_model) {
-                            if old_model == settings.model {
+                        if let Some(m) = &machine {
+                            if nvram_path == target_path {
                                 return Ok(m.bus.devices().unwrap().nvram.clone());
                             }
-                            atomic_write(
-                                &nvram_path_for(nvram_base, old_model),
-                                &m.bus.devices().unwrap().nvram.image(),
-                            )?;
+                            atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())?;
                         }
                         load_nvram(&target_path, settings.model)
                     })();
                     match nvram.and_then(|n| build(&settings, n)) {
                         Ok(new) => {
                             machine = Some(new);
-                            current_model = Some(settings.model);
                             nvram_path = target_path;
                             network = settings
                                 .network
                                 .then(|| NatEngine::new(NatConfig::default()));
                             state.phase = Phase::Running;
                             state.has_machine = true;
+                            state.machine_name = Some(settings.machine_name());
+                            state.machine_description = Some(settings.machine_description());
                             state.steps = 0;
                             state.network_activity = 0;
                             state.serial.clear();
@@ -581,13 +572,21 @@ mod tests {
     fn per_machine_nvram_paths_and_defaults_are_distinct() {
         use crate::settings::Model;
         let base = Path::new("/tmp/heliacal.cfg.nvram");
-        assert_eq!(nvram_path_for(base, Model::Sparcstation5), base);
+        assert_eq!(Settings::default().nvram_path(base), base);
         assert_eq!(
-            nvram_path_for(base, Model::Sparcstation20),
+            Settings {
+                model: Model::Sparcstation20,
+                ..Settings::default()
+            }
+            .nvram_path(base),
             Path::new("/tmp/heliacal.cfg.nvram.ss20")
         );
         assert_eq!(
-            nvram_path_for(base, Model::Axil320),
+            Settings {
+                model: Model::Axil320,
+                ..Settings::default()
+            }
+            .nvram_path(base),
             Path::new("/tmp/heliacal.cfg.nvram.axil320")
         );
         let ss5 = Model::Sparcstation5.default_nvram().image();
@@ -736,6 +735,61 @@ mod tests {
         emu.shutdown().unwrap();
         assert!(wait(&emu, |s| s.phase == Phase::Stopped).error.is_none());
         assert_eq!(fs::read(state_path).unwrap().len(), 8192);
+    }
+
+    #[test]
+    fn named_workstations_of_the_same_model_keep_nvram_and_failed_switches_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("state.nvram");
+        fs::write(
+            dir.path().join("prom"),
+            helios::machine::serial_demo_image(),
+        )
+        .unwrap();
+        fs::write(dir.path().join("gx"), vec![0; 32768]).unwrap();
+        let mut settings = Settings {
+            prom: dir.path().join("prom").display().to_string(),
+            cgsix_rom: dir.path().join("gx").display().to_string(),
+            ..Settings::default()
+        };
+        settings.save_as_machine("A").unwrap();
+        settings.save_as_machine("B").unwrap();
+        let path_b = settings.nvram_path(&base);
+        settings.select_machine("A").unwrap();
+        let path_a = settings.nvram_path(&base);
+        for (path, marker) in [(&path_a, 0x11), (&path_b, 0x22)] {
+            let mut bytes = Nvram::default().image();
+            bytes[0x100] = marker;
+            atomic_write(path, &bytes).unwrap();
+        }
+        let emu = Emulator::new(base).unwrap();
+        emu.boot(settings.clone()).unwrap();
+        wait(&emu, |s| s.serial.contains("HELIOS"));
+        // A reset of the same workstation must retain its live NVRAM.
+        let mut external = Nvram::default().image();
+        external[0x100] = 0x33;
+        fs::write(&path_a, external).unwrap();
+        emu.boot(settings.clone()).unwrap();
+        emu.pause().unwrap(); // FIFO ensures the reset has completed.
+        wait(&emu, |s| s.phase == Phase::Paused);
+        settings.select_machine("B").unwrap();
+        emu.boot(settings.clone()).unwrap();
+        wait(&emu, |s| s.machine_name.as_deref() == Some("B / SS-5"));
+        assert_eq!(fs::read(&path_a).unwrap()[0x100], 0x11);
+        emu.pause().unwrap();
+        let paused = wait(&emu, |s| s.phase == Phase::Paused);
+        settings.save_as_machine("Bad").unwrap();
+        settings.prom = dir.path().join("missing").display().to_string();
+        let bad_path = settings.nvram_path(&dir.path().join("state.nvram"));
+        emu.boot(settings).unwrap();
+        let rejected = wait(&emu, |s| s.error.is_some());
+        assert_eq!(rejected.phase, Phase::Paused);
+        assert_eq!(rejected.machine_name.as_deref(), Some("B / SS-5"));
+        assert_eq!(rejected.steps, paused.steps);
+        assert!(!bad_path.exists());
+        emu.shutdown().unwrap();
+        assert!(wait(&emu, |s| s.phase == Phase::Stopped).error.is_none());
+        assert_eq!(fs::read(&path_b).unwrap()[0x100], 0x22);
     }
     #[test]
     fn missing_firmware_is_recoverable_and_input_is_bounded() {

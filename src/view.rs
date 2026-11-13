@@ -99,6 +99,9 @@ pub fn draw(
         text(c, 392, 390, "H E L I A C A L", TEXT)?;
         text(c, 368, 418, "Happy Years / Sun SPARC", BORDER)?;
         let machine = p.settings.model;
+        if let Some(label) = &p.settings.machine_label {
+            text(c, 304, 446, &format!("Machine: {label}"), ACCENT)?;
+        }
         text(
             c,
             304,
@@ -241,12 +244,13 @@ fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Er
         "SAVING NVRAM...".into()
     } else {
         format!(
-            "{}  |  {} / {} MiB / {} / NAT {}",
+            "{}  |  {}",
             p.state.phase.label(),
-            p.settings.model.short_label(),
-            p.settings.ram_mib,
-            p.settings.model.graphics_short(p.settings.display),
-            if p.settings.network { "on" } else { "off" }
+            p.state
+                .machine_description
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| p.settings.machine_description())
         )
     };
     let keys = if p.captured {
@@ -546,7 +550,15 @@ fn draw_overlay(
         144,
         572,
         if o.edit.is_some() {
-            "Type path / Ctrl+V paste / Ctrl+U clear / Enter accept / Esc cancel"
+            if o.field() == Field::SaveMachineAs {
+                "Type label / Ctrl+U clear / Enter accept / Esc cancel"
+            } else {
+                "Type path / Ctrl+V paste / Ctrl+U clear / Enter accept / Esc cancel"
+            }
+        } else if o.field() == Field::MachineLabel {
+            "Enter cycles saved machines. Save, then F5 to switch an existing guest."
+        } else if o.field() == Field::SaveMachineAs {
+            "Enter creates a new label from this draft. Disk images are shared by path."
         } else if o.tab == Tab::Advanced {
             "Arrows navigate / Enter toggles disk access"
         } else if o.tab == Tab::Network {
@@ -562,7 +574,7 @@ fn draw_overlay(
         c,
         144,
         602,
-        "F9 Save   Esc Close   Firmware/media/access/network apply on next cold reset.",
+        "F9 Save   Esc Close   Machine/firmware/media/network apply on next cold reset.",
         BORDER,
     )?;
     Ok(())

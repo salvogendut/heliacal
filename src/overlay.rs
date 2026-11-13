@@ -24,6 +24,8 @@ impl Tab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     Fixed,
+    MachineLabel,
+    SaveMachineAs,
     Model,
     Display,
     Prom,
@@ -57,7 +59,7 @@ impl Overlay {
         Self {
             draft: settings.clone(),
             tab: Tab::General,
-            selected: 5,
+            selected: 0,
             edit: None,
         }
     }
@@ -74,6 +76,19 @@ impl Overlay {
     pub fn rows(&self) -> Vec<Row> {
         match self.tab {
             Tab::General => vec![
+                (
+                    "Machine label",
+                    self.draft
+                        .machine_label
+                        .clone()
+                        .unwrap_or_else(|| "Unnamed".into()),
+                    Field::MachineLabel,
+                ),
+                (
+                    "Save machine as...",
+                    "Enter a new label".into(),
+                    Field::SaveMachineAs,
+                ),
                 ("Machine", self.draft.model.label().into(), Field::Model),
                 (
                     "Processor",
@@ -202,6 +217,13 @@ impl Overlay {
     }
     pub fn activate(&mut self) {
         match self.field() {
+            Field::MachineLabel => {
+                if !self.draft.next_machine() {
+                    self.selected = 1;
+                    self.edit = Some(String::new());
+                }
+            }
+            Field::SaveMachineAs => self.edit = Some(String::new()),
             Field::Model => {
                 self.draft.model = self.draft.model.next();
                 if !self.draft.model.supports_sx() {
@@ -224,10 +246,16 @@ impl Overlay {
             }
         }
     }
-    pub fn finish_edit(&mut self) {
-        if let Some(value) = self.edit.take() {
-            self.set_path(self.field(), value);
+    pub fn finish_edit(&mut self) -> Result<(), String> {
+        if let Some(value) = self.edit.as_ref() {
+            if self.field() == Field::SaveMachineAs {
+                self.draft.save_as_machine(value)?;
+            } else {
+                self.set_path(self.field(), value.clone());
+            }
+            self.edit = None;
         }
+        Ok(())
     }
     pub fn set_path(&mut self, field: Field, value: String) {
         if let Field::Scsi(id) = field
@@ -297,16 +325,48 @@ impl Confirm {
 mod tests {
     use super::*;
     #[test]
+    fn named_machine_menu_keeps_selection_and_name_errors_in_the_draft() {
+        let mut settings = Settings::default();
+        settings.save_as_machine("Original").unwrap();
+        let mut overlay = Overlay::new(&settings);
+        overlay.selected = 1;
+        overlay.activate();
+        overlay.edit = Some("Original".into());
+        assert!(overlay.finish_edit().is_err());
+        assert_eq!(overlay.edit.as_deref(), Some("Original"));
+        assert_eq!(overlay.draft, settings);
+        overlay.edit = Some("Solaris 2.6".into());
+        overlay.finish_edit().unwrap();
+        assert_eq!(overlay.draft.machine_label.as_deref(), Some("Solaris 2.6"));
+        assert_eq!(settings.machine_label.as_deref(), Some("Original"));
+        overlay.draft.network = false;
+        overlay.selected = 0;
+        overlay.activate();
+        assert_eq!(overlay.draft.machine_label.as_deref(), Some("Original"));
+        assert!(overlay.draft.network);
+        overlay.activate();
+        assert_eq!(overlay.draft.machine_label.as_deref(), Some("Solaris 2.6"));
+        assert!(!overlay.draft.network);
+        drop(overlay); // Discard does not change the live catalog.
+        assert_eq!(settings.machines.len(), 1);
+    }
+
+    #[test]
     fn edits_are_drafts_and_cancel_does_not_apply() {
         let settings = Settings::default();
         let mut overlay = Overlay::new(&settings);
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Prom)
+            .unwrap();
         overlay.activate();
         overlay.edit = Some("discarded.bin".into());
         overlay.edit = None;
         assert_eq!(overlay.draft, settings);
         overlay.activate();
         overlay.edit = Some("accepted.bin".into());
-        overlay.finish_edit();
+        overlay.finish_edit().unwrap();
         assert_eq!(overlay.draft.prom, "accepted.bin");
         assert!(settings.prom.is_empty());
         assert!(overlay.tabs().contains(&Tab::Advanced));
@@ -317,7 +377,11 @@ mod tests {
     fn machine_row_cycles_the_draft_model_without_touching_live_settings() {
         let settings = Settings::default();
         let mut o = Overlay::new(&settings);
-        o.selected = 0;
+        o.selected = o
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Model)
+            .unwrap();
         assert_eq!(o.field(), Field::Model);
         o.activate();
         assert_eq!(o.draft.model, crate::settings::Model::Sparcstation20);
@@ -328,7 +392,11 @@ mod tests {
         o.activate();
         assert_eq!(o.draft.model, crate::settings::Model::Sparcstation5);
         assert!(!o.dirty(&settings));
-        o.selected = 4;
+        o.selected = o
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Display)
+            .unwrap();
         assert_eq!(o.field(), Field::Display);
         o.activate();
         assert_eq!(o.draft.display, Display::Cgsix);

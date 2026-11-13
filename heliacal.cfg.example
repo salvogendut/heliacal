@@ -1,3 +1,5 @@
+# Optional default named machine (defined below). Otherwise use the flat settings.
+# machine_label = "SS20 Solaris 2.6"
 # "sparcstation5", "sparcstation20", or "axil320"
 model = "sparcstation5"
 # "cgsix" or "sx" (native SS-20 CG14)
@@ -25,3 +27,27 @@ scsi = [
   { kind = "disconnected", path = "" }, # ID 5
   { kind = "cdrom",        path = "" }, # ID 6
 ]
+
+# F9 > General > Machine label recalls a complete workstation.
+# Fill in your image paths, relative to this config or absolute.
+# disk/cdrom abbreviate IDs 3/6; menu saves expand them into a full scsi array.
+[machines."SS20 Solaris 2.6"]
+model = "sparcstation20"
+display = "sx"
+prom = ""
+disk = ""
+cdrom = ""
+network = true
+
+[machines."SS5 Solaris 7"]
+model = "sparcstation5"
+prom = ""
+cgsix_rom = ""
+disk = ""
+cdrom = ""
+
+[machines."Axil Solaris 2.6"]
+model = "axil320"
+prom = ""
+cgsix_rom = ""
+disk = ""

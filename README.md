@@ -80,6 +80,73 @@ These shortcuts leave other targets unchanged. Images must contain whole
 so installed systems can update their file systems; CD-ROM images remain
 read-only. Select **Advanced > Disk access** to make all hard disks read-only.
 
+## Named machines
+
+Save a complete workstation under **F9 > General > Save machine as...**.
+Enter a label, press **Enter**, then **F9** to save. Labels accept 1–32
+printable ASCII characters. An existing label is rejected; select that
+machine first to update its settings.
+
+**F9 > General > Machine label** cycles saved machines alphabetically with
+Enter or a click. Each label recalls the model, display, PROM and TurboGX
+ROM, all seven SCSI targets, disk access and networking. Smoothing, scanlines,
+shortcut hints and Tinker remain shared. Selection and edits stay in the
+draft until Save; Discard leaves the saved configuration and guest intact.
+
+After selecting and saving, **Ctrl+P** boots if no guest exists. For an
+existing guest, shut down its OS and use **F5** to confirm a cold reset into
+the selected machine. Ctrl+P continues to pause/resume the existing guest;
+the window title and status strip identify that actual guest until reset.
+One workstation runs per window.
+
+You can define labels directly in `heliacal.cfg`; restart Heliacal after editing
+the file to reload the catalog:
+
+```toml
+machine_label = "SS20 Solaris 2.6"
+smoothing = false
+
+[machines."SS20 Solaris 2.6"]
+model = "sparcstation20"
+display = "sx"
+prom = "/path/to/ss10-20-v2.25r-rom"
+disk = "/path/to/solaris26-ss20.raw"
+cdrom = "/path/to/solaris26.iso"
+network = true
+
+[machines."SS5 Solaris 7"]
+model = "sparcstation5"
+prom = "/path/to/sun-ss5.bin"
+cgsix_rom = "/path/to/turbogx.bin"
+disk = "/path/to/solaris7-ss5.raw"
+```
+
+`machine_label` selects the default; its stanza takes precedence over the
+legacy top-level machine fields. Relative image paths use the config's
+directory. `disk` and `cdrom` are shorthand for SCSI IDs 3 and 6; use the
+seven-entry `scsi` array for other targets. A stanza must not mix a populated
+`disk`/`cdrom` shorthand with `scsi`. Menu saves write complete target arrays.
+Saving checks the selected machine's image files; inactive labels can refer
+to media that is currently offline.
+
+To launch a saved machine directly:
+
+```sh
+./target/release/heliacal --machine-label "SS20 Solaris 2.6"
+# With a separate catalog:
+./target/release/heliacal --config /path/to/heliacal.cfg --machine-label "SS5 Solaris 7"
+```
+
+Explicit CLI model, display and image options override the chosen label for
+that session; F9 Save persists those overrides. Launch still starts paused.
+
+The first label created from an unnamed setup adopts its existing NVRAM
+(`legacy_state = true`). Additional labels get separate NVRAM per label and
+model under `<config>.nvram.machines/<hex-encoded-label>/`; hand-written
+stanzas use this separate state unless `legacy_state = true` is set. Save As
+copies settings, including image paths: it does not clone disk images.
+Existing configurations without labels retain their original NVRAM paths.
+
 ## Controls
 
 | Key / action | Effect |
@@ -135,9 +202,10 @@ The early `disk`/`cdrom` config fields migrate to targets 3/6 on load.
 `network = true` enables the user-mode NAT (default on). See
 [the example configuration](heliacal.cfg.example).
 
-NVRAM is loaded from and atomically saved per machine: `<config-path>.nvram`
+Unnamed configurations load and atomically save NVRAM per model: `<config-path>.nvram`
 for SS-5, `<config-path>.nvram.ss20` for SS-20, and
-`<config-path>.nvram.axil320` for Axil 320. The lock file is
+`<config-path>.nvram.axil320` for Axil 320. Named machines use the state
+paths described above. The lock file is
 `<config-path>.lock`. Concurrent instances cannot use the same config.
 Choose a different config for another workstation instance. Keep
 firmware/disks under ignored `local/` if storing them in this repository.
@@ -153,7 +221,7 @@ checkpoint; startup may take several minutes.
 Implemented: real Helios execution on a worker thread, TurboGX and native
 SS-20 SX/CG14 presentation,
 Sun keyboard and mouse input, pause/resume, confirmed cold reset and quit, NVRAM
-persistence, firmware/media selection, writable/read-only disk access, settings
+persistence, named machine configurations, firmware/media selection, writable/read-only disk access, settings
 drafts, display options, screenshots, and Tinker diagnostics. The included logo
 is used on the paused screen and as the window icon.
 
@@ -191,7 +259,8 @@ SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software \
 ```
 
 `--smoke-test --screenshot /tmp/heliacal-media.bmp` captures the Media
-overlay with temporary disk/CD targets. Smoke tests use temporary preferences and NVRAM. Unit tests exercise
+overlay with temporary disk/CD targets and named-machine creation/recall. Smoke
+tests use temporary preferences and NVRAM. Unit tests exercise
 real-core lifecycle behavior with synthetic firmware, settings failure paths,
 all seven SCSI IDs, disk/CD selection, input backpressure, shared modifier
 keys, and failed NVRAM save/retry.
