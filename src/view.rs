@@ -121,7 +121,15 @@ pub fn draw(
             c,
             288,
             552,
-            &format!("F9  Select {} and TurboGX ROM", machine.prom_label()),
+            &format!(
+                "F9  Select {}{}",
+                machine.prom_label(),
+                if p.settings.display == crate::settings::Display::Sx {
+                    ""
+                } else {
+                    " and TurboGX ROM"
+                }
+            ),
             ACCENT,
         )?;
         text(c, 352, 578, "Ctrl+P  Boot the workstation", MUTED)?;

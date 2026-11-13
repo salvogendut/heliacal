@@ -150,7 +150,8 @@ checkpoint; startup may take several minutes.
 
 ## Status and validation
 
-Implemented: real Helios execution on a worker thread, TurboGX presentation,
+Implemented: real Helios execution on a worker thread, TurboGX and native
+SS-20 SX/CG14 presentation,
 Sun keyboard and mouse input, pause/resume, confirmed cold reset and quit, NVRAM
 persistence, firmware/media selection, writable/read-only disk access, settings
 drafts, display options, screenshots, and Tinker diagnostics. The included logo
@@ -158,9 +159,14 @@ is used on the paused screen and as the window icon.
 
 Validated on Linux with SDL3's software/dummy driver: the original Sun PROM
 renders its SPARCstation 5 banner, reports **128 MB installed** and **Keyboard
-Present**, and starts its memory test. This frontend check establishes display
-integration; it does not establish OS boot or installation compatibility.
-Guest mouse is connected after capture; audio, interactive serial,
+Present**, and starts its memory test. Native SS-20 SX/CG14 also boots an
+installed Solaris 2.6 disk through the graphical console and runs Xsun with
+olwm and xterm. Linux/X11 input checks cover console login, xterm typing,
+mouse capture/release, and a 20-pixel title-bar drag with an unchanged
+translated client image. A typed guest halt completes filesystem sync and
+returns to the graphical OBP prompt. These are specific installed-disk and
+desktop checkpoints; SX instruction coverage and full POST remain incomplete.
+Audio, interactive serial,
 clipboard-to-guest paste, and additional models are not provided yet. Host
 networking is available as user-mode NAT: enable it in F9 > Network, then
 configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
