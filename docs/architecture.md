@@ -22,7 +22,18 @@ state and loads the incoming label's file. The published machine name and
 hardware summary change only after successful construction, so saving a
 different selection does not relabel a guest that is still running.
 
-The worker advances guest time only through `Machine::step`. It publishes one
+The worker uses `Machine::step` for one CPU and `Machine::step_scheduled` for
+an explicitly selected two-CPU machine. The topology fixes that choice until
+cold replacement; it never mixes the two execution APIs on a running guest.
+One worker owns both CPUs and shared devices. The core owns all scheduling
+and shared virtual time; the frontend does not advance devices per CPU.
+Snapshots retain hardware processor IDs 0/2 in Tinker diagnostics and errors;
+step totals count execution outcomes, including trap/interrupt entry and
+software reset. They are not a retired-instruction count. Old files select
+one CPU; model/count validation uses the core's supported topology before
+construction. CPU-count changes participate in the cold-reset comparison.
+
+It publishes one
 latest immutable RGBA framebuffer and a small status snapshot, at most about
 30 times per host second. The main thread renders at about 60 Hz and never
 holds a machine lock. Old frames are replaced rather than queued. The

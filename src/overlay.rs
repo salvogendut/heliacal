@@ -27,6 +27,7 @@ pub enum Field {
     MachineLabel,
     SaveMachineAs,
     Model,
+    CpuCount,
     Display,
     Prom,
     Rom,
@@ -94,6 +95,19 @@ impl Overlay {
                     "Processor",
                     self.draft.model.processor().into(),
                     Field::Fixed,
+                ),
+                (
+                    "CPUs",
+                    if self.draft.cpus == 2 {
+                        "2 (experimental SMP)".into()
+                    } else {
+                        "1".into()
+                    },
+                    if self.draft.model == crate::settings::Model::Sparcstation5 {
+                        Field::Fixed
+                    } else {
+                        Field::CpuCount
+                    },
                 ),
                 (
                     "Memory",
@@ -226,10 +240,20 @@ impl Overlay {
             Field::SaveMachineAs => self.edit = Some(String::new()),
             Field::Model => {
                 self.draft.model = self.draft.model.next();
+                if self
+                    .draft
+                    .model
+                    .profile()
+                    .processor_topology(usize::from(self.draft.cpus))
+                    .is_none()
+                {
+                    self.draft.cpus = 1;
+                }
                 if !self.draft.model.supports_sx() {
                     self.draft.display = Display::Cgsix;
                 }
             }
+            Field::CpuCount => self.draft.cpus = if self.draft.cpus == 1 { 2 } else { 1 },
             Field::Display => {
                 if self.draft.model.supports_sx() {
                     self.draft.display = self.draft.display.next();
@@ -324,6 +348,39 @@ impl Confirm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_selection_is_a_draft_and_model_changes_enforce_topology() {
+        use crate::settings::Model;
+        let saved = Settings {
+            model: Model::Sparcstation20,
+            ..Settings::default()
+        };
+        let mut overlay = Overlay::new(&saved);
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|r| r.field == Field::CpuCount)
+            .unwrap();
+        overlay.activate();
+        assert_eq!(overlay.draft.cpus, 2);
+        assert_eq!(saved.cpus, 1);
+        overlay.activate();
+        assert_eq!(overlay.draft.cpus, 1);
+        overlay.activate();
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|r| r.field == Field::Model)
+            .unwrap();
+        overlay.activate(); // SS20 -> Axil retains two single-CPU modules.
+        assert_eq!(overlay.draft.cpus, 2);
+        overlay.activate(); // Axil -> SS5 has only one integrated CPU.
+        assert_eq!(overlay.draft.cpus, 1);
+        assert!(!overlay.rows().iter().any(|r| r.field == Field::CpuCount));
+        overlay.draft.validate().unwrap();
+    }
+
     #[test]
     fn named_machine_menu_keeps_selection_and_name_errors_in_the_draft() {
         let mut settings = Settings::default();

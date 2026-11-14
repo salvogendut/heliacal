@@ -449,7 +449,14 @@ fn draw_overlay(
                     c,
                     144,
                     300,
-                    &format!("Helios / PC {:08x} / {} steps", state.pc, state.steps),
+                    &if let Some(pc2) = state.secondary_pc {
+                        format!(
+                            "CPU0 {:08x} / CPU2 {:08x} / {} + {} steps",
+                            state.pc, pc2, state.processor_steps[0], state.processor_steps[1]
+                        )
+                    } else {
+                        format!("Helios / CPU0 PC {:08x} / {} steps", state.pc, state.steps)
+                    },
                     BORDER,
                 )?;
                 text(
@@ -559,6 +566,8 @@ fn draw_overlay(
             "Enter cycles saved machines. Save, then F5 to switch an existing guest."
         } else if o.field() == Field::SaveMachineAs {
             "Enter creates a new label from this draft. Disk images are shared by path."
+        } else if o.field() == Field::CpuCount {
+            "Enter toggles 1/2 CPUs. Experimental SMP; applies on next cold reset."
         } else if o.tab == Tab::Advanced {
             "Arrows navigate / Enter toggles disk access"
         } else if o.tab == Tab::Network {
