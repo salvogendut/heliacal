@@ -456,6 +456,9 @@ fn run(
                             state.network_activity = 0;
                             state.serial.clear();
                             state.error = None;
+                            state.pixels = Arc::new(vec![0; WIDTH * HEIGHT * 4]);
+                            state.frame = state.frame.wrapping_add(1);
+                            frame_cache = FrameCache::default();
                             pressed.fill(false);
                             pending_keys.clear();
                             pending_mouse.clear();

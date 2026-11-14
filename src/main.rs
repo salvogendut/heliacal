@@ -530,6 +530,11 @@ fn run(options: Options) -> Result<()> {
         view::HEIGHT,
         sdl3::sys::render::SDL_RendererLogicalPresentation::LETTERBOX,
     )?;
+    eprintln!(
+        "Heliacal video_driver={} renderer={}",
+        video.current_video_driver(),
+        canvas.renderer_name
+    );
     let creator = canvas.texture_creator();
     let mut logo_texture = creator.create_texture_streaming(PixelFormat::RGBA32, lw, lh)?;
     logo_texture.update(None, &logo_bytes, lw as usize * 4)?;
@@ -547,14 +552,27 @@ fn run(options: Options) -> Result<()> {
     let mut last_steps = 0;
     let mut last_scsi = [(0u64, 0u64); settings::SCSI_TARGETS];
     let mut last_network = 0u64;
+    let mut last_leds = u64::MAX;
+    let mut last_phase = Phase::Ready;
+    let mut last_has_machine = false;
+    let mut last_machine_name: Option<String> = None;
+    let mut last_error: Option<String> = None;
+    let mut last_notice: Option<String> = None;
+    let mut last_captured = false;
+    let mut last_shutdown_failed = false;
+    let mut redraw = true;
+    let mut grabbed: Option<bool> = None;
+    let mut scale_mode: Option<ScaleMode> = None;
+    let mut pending_event: Option<Event> = None;
     let started = Instant::now();
     let mut display_at: Option<Instant> = None;
     if options.boot_smoke {
         app.emulator.boot(app.settings.clone())?;
     }
     loop {
-        let frame_started = Instant::now();
-        for event in events.poll_iter() {
+        let mut event_seen = false;
+        for event in pending_event.take().into_iter().chain(events.poll_iter()) {
+            event_seen = true;
             match event {
                 Event::Quit { .. } => app.ask(Confirm::Quit),
                 Event::Window {
@@ -653,16 +671,19 @@ fn run(options: Options) -> Result<()> {
                     app.picked(field, path);
                 }
                 app.picker = None;
+                redraw = true;
             }
             Some((_, Ok(Err(error)))) => {
                 if error != "Canceled" {
                     app.notify(error);
                 }
                 app.picker = None;
+                redraw = true;
             }
             Some((_, Err(mpsc::TryRecvError::Disconnected))) => {
                 app.picker = None;
                 app.notify("File picker closed without a selection.");
+                redraw = true;
             }
             Some((_, Err(mpsc::TryRecvError::Empty))) | None => {}
         }
@@ -675,9 +696,12 @@ fn run(options: Options) -> Result<()> {
                 text_input.stop(canvas.window());
             }
         }
-        canvas.window_mut().set_keyboard_grab(app.captured);
-        sdl.mouse()
-            .set_relative_mouse_mode(canvas.window(), app.captured);
+        if grabbed != Some(app.captured) {
+            canvas.window_mut().set_keyboard_grab(app.captured);
+            sdl.mouse()
+                .set_relative_mouse_mode(canvas.window(), app.captured);
+            grabbed = Some(app.captured);
+        }
         let state = app.emulator.snapshot();
         let name = state
             .machine_name
@@ -687,26 +711,41 @@ fn run(options: Options) -> Result<()> {
         if canvas.window().title() != title {
             canvas.window_mut().set_title(&title)?;
         }
-        let mut events = 0;
+        if state.phase != last_phase
+            || state.has_machine != last_has_machine
+            || state.machine_name != last_machine_name
+            || state.error != last_error
+            || state.shutdown_failed != last_shutdown_failed
+            || app.captured != last_captured
+        {
+            redraw = true;
+            last_phase = state.phase;
+            last_has_machine = state.has_machine;
+            last_machine_name = state.machine_name.clone();
+            last_error = state.error.clone();
+            last_shutdown_failed = state.shutdown_failed;
+            last_captured = app.captured;
+        }
+        let mut activity_events = 0;
         if state.phase == Phase::Running && state.steps > last_steps {
-            events |= activity::cpu();
+            activity_events |= activity::cpu();
         }
         last_steps = state.steps;
         if state.network_activity > last_network {
-            events |= activity::ethernet();
+            activity_events |= activity::ethernet();
         }
         last_network = state.network_activity;
         for (id, (reads, writes)) in state.scsi_activity.iter().enumerate() {
             let (last_reads, last_writes) = last_scsi[id];
             if *reads > last_reads {
-                events |= activity::disk_read(id);
+                activity_events |= activity::disk_read(id);
             }
             if *writes > last_writes {
-                events |= activity::disk_write(id);
+                activity_events |= activity::disk_write(id);
             }
             last_scsi[id] = (*reads, *writes);
         }
-        leds.update(events, Instant::now());
+        leds.update(activity_events, Instant::now());
         if app.quitting && state.shutdown_failed {
             app.quitting = false;
             app.notify("NVRAM could not be saved; machine retained. Fix the path/permissions and retry quit.");
@@ -717,12 +756,17 @@ fn run(options: Options) -> Result<()> {
         if frame_id != state.frame {
             guest.update(None, &state.pixels, gw as usize * 4)?;
             frame_id = state.frame;
+            redraw = true;
         }
-        guest.set_scale_mode(if app.settings.smoothing {
+        let next_scale = if app.settings.smoothing {
             ScaleMode::Linear
         } else {
             ScaleMode::Nearest
-        });
+        };
+        if scale_mode != Some(next_scale) {
+            guest.set_scale_mode(next_scale);
+            scale_mode = Some(next_scale);
+        }
         if app
             .notice
             .as_ref()
@@ -730,21 +774,36 @@ fn run(options: Options) -> Result<()> {
         {
             app.notice = None;
         }
-        view::draw(
-            &mut canvas,
-            &guest,
-            &logo_texture,
-            view::Presentation {
-                settings: &app.settings,
-                state: &state,
-                overlay: app.overlay.as_ref(),
-                confirm: app.confirm,
-                captured: app.captured,
-                leds: leds.lit,
-                notice: app.notice.as_ref().map(|(s, _)| s.as_str()),
-                quitting: app.quitting,
-            },
-        )?;
+        let notice = app.notice.as_ref().map(|(s, _)| s.clone());
+        if leds.lit != last_leds {
+            last_leds = leds.lit;
+            redraw = true;
+        }
+        if notice != last_notice {
+            last_notice = notice;
+            redraw = true;
+        }
+        if event_seen {
+            redraw = true;
+        }
+        if redraw {
+            view::draw(
+                &mut canvas,
+                &guest,
+                &logo_texture,
+                view::Presentation {
+                    settings: &app.settings,
+                    state: &state,
+                    overlay: app.overlay.as_ref(),
+                    confirm: app.confirm,
+                    captured: app.captured,
+                    leds: leds.lit,
+                    notice: app.notice.as_ref().map(|(s, _)| s.as_str()),
+                    quitting: app.quitting,
+                },
+            )?;
+            redraw = false;
+        }
         count += 1;
         if options.smoke {
             if count == 2 {
@@ -899,7 +958,16 @@ fn run(options: Options) -> Result<()> {
             }
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(16).saturating_sub(frame_started.elapsed()));
+        if !redraw {
+            let timeout = if state.phase == Phase::Running {
+                16
+            } else if app.notice.is_some() {
+                50
+            } else {
+                100
+            };
+            pending_event = events.wait_event_timeout(Duration::from_millis(timeout));
+        }
     }
 }
 fn pointer_button(button: sdl3::mouse::MouseButton) -> Option<u8> {
