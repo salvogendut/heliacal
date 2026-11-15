@@ -1,5 +1,7 @@
 # Agent notes
 
+- [ram-capacity.md](ram-capacity.md) — issue #3 frontend handoff: shared RAM validation, F9/named-machine selection, actual allocation, cold replacement and acceptance.
+
 - [cpu-selection.md](cpu-selection.md) — one/two-CPU settings, named machines, scheduled worker integration, original-firmware smoke and remaining SMP acceptance.
 
 - [build-environment.md](build-environment.md) — reuse the existing local Rust/SDL3 setup.
