@@ -11,6 +11,7 @@ pub struct NamedMachine {
     pub legacy_state: bool,
     pub model: Model,
     pub display: Display,
+    pub cpus: u8,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -31,6 +32,7 @@ impl NamedMachine {
             legacy_state,
             model: settings.model,
             display: settings.display,
+            cpus: settings.cpus,
             ram_mib: settings.ram_mib,
             prom: settings.prom.clone(),
             cgsix_rom: settings.cgsix_rom.clone(),
@@ -43,6 +45,7 @@ impl NamedMachine {
     fn apply(&self, settings: &mut Settings) {
         settings.model = self.model;
         settings.display = self.display;
+        settings.cpus = self.cpus;
         settings.ram_mib = self.ram_mib;
         settings.prom = self.prom.clone();
         settings.cgsix_rom = self.cgsix_rom.clone();
@@ -148,8 +151,14 @@ impl Settings {
 
     pub fn machine_description(&self) -> String {
         format!(
-            "{} / {} MiB / {} / NAT {}",
+            "{} / {} CPU{} / {} MiB / {} / NAT {}",
             self.machine_name(),
+            self.cpus,
+            if self.cpus == 1 {
+                ""
+            } else {
+                "s (experimental)"
+            },
             self.ram_mib,
             self.model.graphics_short(self.display),
             if self.network { "on" } else { "off" }
@@ -184,6 +193,41 @@ mod tests {
     use super::*;
     use crate::settings::TargetKind;
     use std::fs;
+
+    #[test]
+    fn named_cpu_counts_persist_and_old_catalogs_remain_single_cpu() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("heliacal.cfg");
+        fs::write(
+            &config,
+            r#"
+machine_label = "dual"
+[machines.dual]
+model = "sparcstation20"
+display = "sx"
+cpus = 2
+[machines.old]
+model = "axil320"
+"#,
+        )
+        .unwrap();
+        let mut settings = Settings::load(&config).unwrap();
+        assert_eq!(settings.cpus, 2);
+        settings.select_machine("old").unwrap();
+        assert_eq!(settings.cpus, 1);
+        settings.cpus = 2;
+        settings.remember_machine();
+        settings.save_as_machine("copy").unwrap();
+        settings.save(&config).unwrap();
+        let mut loaded = Settings::load(&config).unwrap();
+        for label in ["dual", "old", "copy"] {
+            loaded.select_machine(label).unwrap();
+            assert_eq!(loaded.cpus, 2);
+            assert!(loaded.machine_description().contains("2 CPUs"));
+        }
+        loaded.machines.get_mut("old").unwrap().cpus = 4;
+        assert!(loaded.validate().unwrap_err().contains("old"));
+    }
 
     #[test]
     fn named_stanzas_override_flat_defaults_and_resolve_every_dependency() {

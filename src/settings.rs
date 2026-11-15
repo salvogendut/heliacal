@@ -104,8 +104,8 @@ impl Model {
     pub fn processor(self) -> &'static str {
         match self {
             Self::Sparcstation5 => "microSPARC-II / 85 MHz",
-            Self::Sparcstation20 => "SuperSPARC-II / single processor",
-            Self::Axil320 => "SuperSPARC 390Z55 / single processor",
+            Self::Sparcstation20 => "SuperSPARC-II",
+            Self::Axil320 => "SuperSPARC 390Z55",
         }
     }
 
@@ -164,6 +164,7 @@ pub struct Settings {
     pub machines: BTreeMap<String, crate::profiles::NamedMachine>,
     pub model: Model,
     pub display: Display,
+    pub cpus: u8,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -183,6 +184,7 @@ impl Default for Settings {
             machines: BTreeMap::new(),
             model: Model::Sparcstation5,
             display: Display::Cgsix,
+            cpus: 1,
             ram_mib: RAM_MIB,
             prom: String::new(),
             cgsix_rom: String::new(),
@@ -241,6 +243,23 @@ impl Settings {
     }
 
     pub fn validate_hardware(&self) -> Result<(), String> {
+        if self
+            .model
+            .profile()
+            .processor_topology(usize::from(self.cpus))
+            .is_none()
+        {
+            return Err(format!(
+                "{} supports {} in this release (requested {})",
+                self.model.label(),
+                if self.model == Model::Sparcstation5 {
+                    "1 CPU"
+                } else {
+                    "1 or 2 CPUs; dual-CPU MBus modules are not implemented"
+                },
+                self.cpus,
+            ));
+        }
         if self.ram_mib != RAM_MIB {
             return Err("This release supports 128 MiB RAM on SS-5, SS-20 and Axil 320".into());
         }
@@ -322,6 +341,7 @@ impl Settings {
         self.machine_label == other.machine_label
             && self.nvram_path(Path::new("nvram")) == other.nvram_path(Path::new("nvram"))
             && self.model == other.model
+            && self.cpus == other.cpus
             && self.display == other.display
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
@@ -452,6 +472,37 @@ pub fn default_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_counts_default_to_one_validate_and_require_cold_replacement() {
+        let old: Settings = toml::from_str("model = 'sparcstation20'").unwrap();
+        assert_eq!(old.cpus, 1);
+        for model in Model::ALL {
+            for cpus in [0, 1, 2, 3, 4, 255] {
+                let s = Settings {
+                    model,
+                    cpus,
+                    ..Settings::default()
+                };
+                assert_eq!(
+                    s.validate_hardware().is_ok(),
+                    cpus == 1 || (cpus == 2 && model != Model::Sparcstation5),
+                    "{model:?}/{cpus}"
+                );
+            }
+        }
+        let dual = Settings {
+            cpus: 2,
+            ..old.clone()
+        };
+        assert!(!old.hardware_eq(&dual));
+        let roundtrip: Settings = toml::from_str(&toml::to_string(&dual).unwrap()).unwrap();
+        assert_eq!(dual, roundtrip);
+        for text in ["cpus = -1", "cpus = 1.5", "cpus = '2'"] {
+            assert!(toml::from_str::<Settings>(text).is_err());
+        }
+    }
+
     #[test]
     fn disk_access_defaults_to_read_write_and_roundtrips_read_only() {
         assert!(!Settings::default().disk_read_only);

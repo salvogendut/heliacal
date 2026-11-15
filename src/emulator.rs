@@ -6,7 +6,7 @@ use helios::{
         nvram::Nvram,
         serial::Channel,
     },
-    machine::Machine,
+    machine::{Machine, SchedulerError},
     net::{NatConfig, NatEngine},
 };
 use std::{
@@ -52,6 +52,9 @@ pub struct Snapshot {
     pub frame: u64,
     pub steps: u64,
     pub pc: u32,
+    pub secondary_pc: Option<u32>,
+    /// Scheduler outcomes by populated module (hardware processors 0 and 2).
+    pub processor_steps: [u64; 2],
     pub serial: String,
     pub error: Option<String>,
     pub has_machine: bool,
@@ -70,6 +73,8 @@ impl Default for Snapshot {
             frame: 0,
             steps: 0,
             pc: 0,
+            secondary_pc: None,
+            processor_steps: [0; 2],
             serial: String::new(),
             error: None,
             has_machine: false,
@@ -240,8 +245,14 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         settings.model.prom_label(),
         helios::machine::MAX_PROM_BYTES,
     )?;
-    let mut machine = Machine::with_profile(profile, RAM_MIB as usize * 1024 * 1024, &prom, nvram)
-        .map_err(|e| e.to_string())?;
+    let mut machine = Machine::with_profile_processors(
+        profile,
+        RAM_MIB as usize * 1024 * 1024,
+        &prom,
+        nvram,
+        usize::from(settings.cpus),
+    )
+    .map_err(|e| e.to_string())?;
     if settings.display == Display::Sx {
         if !settings.model.supports_sx() {
             return Err(format!(
@@ -363,6 +374,7 @@ fn publish(
         });
     }
     state.pc = machine.cpu.pc();
+    state.secondary_pc = machine.secondary_cpu().map(|module| module.cpu.pc());
     state.scsi_activity = std::array::from_fn(|id| {
         machine
             .bus
@@ -373,6 +385,22 @@ fn publish(
             .map_or((0, 0), |target| target.activity())
     });
     *shared.lock().unwrap() = state.clone();
+}
+
+// Choose once per machine topology; never mix legacy and scheduled stepping
+// on a running dual-CPU machine. Single-CPU machines keep the accepted path.
+fn step_machine(machine: &mut Machine) -> Result<u8, SchedulerError> {
+    if machine.secondary_cpu().is_some() {
+        machine.step_scheduled().map(|outcome| outcome.processor)
+    } else {
+        machine
+            .step()
+            .map(|_| 0)
+            .map_err(|fault| SchedulerError::Cpu {
+                processor: 0,
+                fault,
+            })
+    }
 }
 
 fn run(
@@ -453,6 +481,7 @@ fn run(
                             state.machine_name = Some(settings.machine_name());
                             state.machine_description = Some(settings.machine_description());
                             state.steps = 0;
+                            state.processor_steps = [0; 2];
                             state.network_activity = 0;
                             state.serial.clear();
                             state.error = None;
@@ -519,9 +548,12 @@ fn run(
                 pressed[code as usize] = down;
                 pending_keys.pop_front();
             }
-            match m.step() {
-                Ok(_) => state.steps += 1,
-                Err(error) if error.is_power_off() => {
+            match step_machine(m) {
+                Ok(processor) => {
+                    state.steps += 1;
+                    state.processor_steps[usize::from(processor / 2)] += 1;
+                }
+                Err(SchedulerError::Cpu { fault, .. }) if fault.is_power_off() => {
                     state.phase = Phase::Stopped;
                     state.error = None;
                     state.serial.push_str("\nSystem powered off.\n");
@@ -529,7 +561,7 @@ fn run(
                 }
                 Err(error) => {
                     state.phase = Phase::Failed;
-                    state.error = Some(format!("Helios stopped at PC={:08x}: {error:?}", error.pc));
+                    state.error = Some(format!("Helios stopped: {error}"));
                     eprintln!("{}", state.error.as_ref().unwrap());
                     break;
                 }
@@ -571,6 +603,112 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dual_cpu_test_settings(dir: &Path, model: Model) -> Settings {
+        // Both CPUs execute reset firmware. CPU0 releases CPU2 through a
+        // guest STA to AER; no host-set entry point or arbitration override.
+        let program: [u32; 7] = [
+            0x0338_0000, // sethi %hi(0xe0000000), %g1
+            0x8200_6fff, // add %g1, 0xfff, %g1
+            0x8200_6009, // add %g1, 9, %g1 -> AER low word
+            0x8410_2004, // or %g0, 4, %g2 (enable hardware CPU2)
+            0xc4a0_45e0, // sta %g2, [%g1] ASI 0x2f
+            0x1080_0000, // ba .
+            0x0100_0000, // nop
+        ];
+        fs::write(
+            dir.join("prom"),
+            program
+                .into_iter()
+                .flat_map(u32::to_be_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        fs::write(dir.join("gx"), vec![0; 32768]).unwrap();
+        Settings {
+            model,
+            cpus: 2,
+            network: false,
+            display: if model == Model::Sparcstation20 {
+                Display::Sx
+            } else {
+                Display::Cgsix
+            },
+            prom: dir.join("prom").display().to_string(),
+            cgsix_rom: dir.join("gx").display().to_string(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn dual_worker_runs_both_cpus_pauses_and_replaces_with_one() {
+        for model in [Model::Sparcstation20, Model::Axil320] {
+            let dir = tempfile::tempdir().unwrap();
+            let settings = dual_cpu_test_settings(dir.path(), model);
+            let base = dir.path().join("state.nvram");
+            let emu = Emulator::new(base.clone()).unwrap();
+            emu.boot(settings.clone()).unwrap();
+            let running = wait(&emu, |s| s.processor_steps.iter().all(|&n| n > 10));
+            assert_eq!(running.phase, Phase::Running);
+            assert!(running.secondary_pc.is_some());
+            assert!(
+                running
+                    .machine_description
+                    .as_ref()
+                    .unwrap()
+                    .contains("2 CPUs")
+            );
+            assert_eq!(running.steps, running.processor_steps.iter().sum::<u64>());
+            emu.pause().unwrap();
+            let paused = wait(&emu, |s| s.phase == Phase::Paused);
+            thread::sleep(Duration::from_millis(40));
+            assert_eq!(paused.processor_steps, emu.snapshot().processor_steps);
+            // Invalid replacements must preserve both processors and paused state.
+            emu.boot(Settings {
+                cpus: 4,
+                ..settings.clone()
+            })
+            .unwrap();
+            let rejected = wait(&emu, |s| s.error.is_some());
+            assert_eq!(rejected.phase, Phase::Paused);
+            assert_eq!(rejected.processor_steps, paused.processor_steps);
+            emu.pause().unwrap();
+            wait(&emu, |s| s.processor_steps[1] > paused.processor_steps[1]);
+            emu.boot(Settings {
+                cpus: 1,
+                ..settings.clone()
+            })
+            .unwrap();
+            let single = wait(&emu, |s| {
+                s.secondary_pc.is_none() && s.processor_steps[0] > 10
+            });
+            assert_eq!(single.processor_steps[1], 0);
+            assert!(
+                single
+                    .machine_description
+                    .as_ref()
+                    .unwrap()
+                    .contains("1 CPU /")
+            );
+            emu.shutdown().unwrap();
+            assert!(wait(&emu, |s| s.phase == Phase::Stopped).error.is_none());
+            assert_eq!(fs::read(settings.nvram_path(&base)).unwrap().len(), 8192);
+        }
+    }
+
+    #[test]
+    fn secondary_execution_errors_keep_the_hardware_processor_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dual_cpu_test_settings(dir.path(), Model::Sparcstation20);
+        let mut m = build(&settings, settings.model.default_nvram()).unwrap();
+        // Error attribution fixture: deliberately invalid secondary instruction.
+        m.load_image(0x1000, &[0; 4]).unwrap();
+        m.set_processor_entry(2, 0x1000, 0x1004);
+        let error = (0..32).find_map(|_| step_machine(&mut m).err()).unwrap();
+        assert!(matches!(error, SchedulerError::Cpu { processor: 2, fault } if fault.pc == 0x1000));
+        assert!(error.to_string().contains("processor 2"));
+    }
+
     #[test]
     fn per_machine_nvram_paths_and_defaults_are_distinct() {
         use crate::settings::Model;

@@ -67,6 +67,7 @@ struct Options {
     machine_label: Option<String>,
     machine: Option<Model>,
     display: Option<Display>,
+    cpus: Option<u8>,
     prom: Option<String>,
     rom: Option<String>,
     disk: Option<String>,
@@ -83,7 +84,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -108,6 +109,14 @@ impl Options {
                             .into());
                         }
                     });
+                }
+                "--cpus" => {
+                    o.cpus = Some(
+                        args.next()
+                            .ok_or("--cpus needs a count")?
+                            .parse()
+                            .map_err(|_| "--cpus needs an integer (1 or 2)")?,
+                    );
                 }
                 "--display" => {
                     let value = args.next().ok_or("--display needs cgsix or sx")?;
@@ -467,6 +476,9 @@ fn run(options: Options) -> Result<()> {
     if let Some(model) = options.machine {
         settings.model = model;
     }
+    if let Some(cpus) = options.cpus {
+        settings.cpus = cpus;
+    }
     if let Some(display) = options.display {
         settings.display = display;
     }
@@ -489,6 +501,7 @@ fn run(options: Options) -> Result<()> {
             };
         }
     }
+    settings.validate_hardware()?;
     let config = temp
         .as_ref()
         .map_or(source_config, |dir| dir.path().join("heliacal.cfg"));
@@ -889,6 +902,14 @@ fn run(options: Options) -> Result<()> {
                     .position(|r| r.field == Field::Display)
                     .unwrap();
                 o.activate();
+                o.selected = o
+                    .rows()
+                    .iter()
+                    .position(|r| r.field == Field::CpuCount)
+                    .unwrap();
+                o.activate();
+                assert_eq!(o.draft.cpus, 2);
+                assert_eq!(app.settings.cpus, 1);
                 o.selected = 1;
                 o.activate();
                 o.edit = Some("SS20 Solaris".into());
@@ -897,6 +918,8 @@ fn run(options: Options) -> Result<()> {
                 let saved = Settings::load(&app.config)?;
                 assert_eq!(saved.model, Model::Sparcstation20);
                 assert_eq!(saved.display, Display::Sx);
+                assert_eq!(saved.cpus, 2);
+                assert_eq!(saved.machines["Original"].cpus, 1);
                 assert_eq!(saved.machines["Original"].model, Model::Sparcstation5);
             }
             if count == 14 {
@@ -909,6 +932,7 @@ fn run(options: Options) -> Result<()> {
                 assert_eq!(app.settings.machine_label.as_deref(), Some("SS20 Solaris"));
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 assert_eq!(Settings::load(&app.config)?.model, Model::Sparcstation5);
+                assert_eq!(Settings::load(&app.config)?.cpus, 1);
                 assert_eq!(state.phase, Phase::Ready);
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.notice = None;

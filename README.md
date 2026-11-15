@@ -14,6 +14,25 @@ its native **SX/CG14** framebuffer or a **TurboGX** card; select this with
 **F9 > General > Display** or `--display sx|cgsix`. The native SX option does
 not need a TurboGX ROM. RAM sizes are not selectable.
 
+**F9 > General > CPUs** selects one or two CPUs on SS-20/Axil; SS-5 is
+fixed at one. Two CPUs use two identical single-CPU MBus modules and are
+**experimental**: original OBP identifies both, and Solaris 2.6 SMP boots with
+both CPUs online. Recorded Linux/X11 checkpoints include SS-20 native-SX
+terminal input, capture and dragging, plus Axil/CGsix CDE window operations,
+focus-loss key release, disk activity and clean reset/reboot persistence.
+These are bounded workloads, not exhaustive SMP compatibility. Save with F9,
+then use F5 to confirm a cold reset of an existing guest. CPU count is also
+saved with each named machine (`cpus = 2`) and can be overridden for a session
+with `--cpus 2`. Old configurations default to one CPU.
+
+SS-20 and Axil can accommodate up to four hardware CPUs using two compatible
+dual-CPU MBus modules. Helios currently implements one CPU per module, so
+counts other than one or two are rejected; four is not a working frontend
+option. Sun's [SS-20 service manual, table 12-1](https://docs.oracle.com/cd/E19127-01/sparc20.ws/801-6189-12/801-6189-12.pdf)
+lists dual-processor modules, and the [module installation guide](https://docs.oracle.com/cd/E19957-01/802-2566-11/install.chapter3.html)
+requires compatible pairs. Axil's use of the same modules is confirmed by
+the project owner; implementing those dual-CPU modules is a later core milestone.
+
 ## Build and run
 
 Keep the checkouts alongside each other:
@@ -88,7 +107,7 @@ printable ASCII characters. An existing label is rejected; select that
 machine first to update its settings.
 
 **F9 > General > Machine label** cycles saved machines alphabetically with
-Enter or a click. Each label recalls the model, display, PROM and TurboGX
+Enter or a click. Each label recalls the model, CPU count, display, PROM and TurboGX
 ROM, all seven SCSI targets, disk access and networking. Smoothing, scanlines,
 shortcut hints and Tinker remain shared. Selection and edits stay in the
 draft until Save; Discard leaves the saved configuration and guest intact.
@@ -260,7 +279,9 @@ SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software \
 
 `--smoke-test --screenshot /tmp/heliacal-media.bmp` captures the Media
 overlay with temporary disk/CD targets and named-machine creation/recall. Smoke
-tests use temporary preferences and NVRAM. Unit tests exercise
+tests use temporary preferences and NVRAM. The SDL smoke also saves and recalls
+a two-CPU named machine. Unit tests exercise both CPUs running on the worker,
+pause/resume, failed replacement, and a cold switch back to one CPU, plus
 real-core lifecycle behavior with synthetic firmware, settings failure paths,
 all seven SCSI IDs, disk/CD selection, input backpressure, shared modifier
 keys, and failed NVRAM save/retry.
