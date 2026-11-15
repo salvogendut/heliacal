@@ -3,6 +3,8 @@ mod emulator;
 mod input;
 mod overlay;
 mod profiles;
+#[cfg(test)]
+mod ram_acceptance_tests;
 mod settings;
 mod view;
 
@@ -68,6 +70,7 @@ struct Options {
     machine: Option<Model>,
     display: Option<Display>,
     cpus: Option<u8>,
+    ram_mib: Option<u32>,
     prom: Option<String>,
     rom: Option<String>,
     disk: Option<String>,
@@ -78,13 +81,34 @@ struct Options {
 }
 impl Options {
     fn parse() -> Result<Option<Self>> {
+        Self::parse_from(std::env::args().skip(1))
+    }
+
+    fn apply_hardware(&self, settings: &mut Settings) -> Result<()> {
+        if let Some(model) = self.machine {
+            settings.model = model;
+        }
+        if let Some(cpus) = self.cpus {
+            settings.cpus = cpus;
+        }
+        if let Some(ram_mib) = self.ram_mib {
+            settings.ram_mib = ram_mib;
+        }
+        if let Some(display) = self.display {
+            settings.display = display;
+        }
+        settings.validate_hardware()?;
+        Ok(())
+    }
+
+    fn parse_from(args: impl Iterator<Item = String>) -> Result<Option<Self>> {
         let mut o = Self::default();
-        let mut args = std::env::args().skip(1);
+        let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320 / 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -116,6 +140,14 @@ impl Options {
                             .ok_or("--cpus needs a count")?
                             .parse()
                             .map_err(|_| "--cpus needs an integer (1 or 2)")?,
+                    );
+                }
+                "--ram-mib" => {
+                    let value = args.next().ok_or("--ram-mib needs MiB")?;
+                    o.ram_mib = Some(
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| "--ram-mib needs a non-negative integer number of MiB")?,
                     );
                 }
                 "--display" => {
@@ -253,12 +285,20 @@ impl App {
         }
     }
     fn activate(&mut self, window: &sdl3::video::Window) -> std::result::Result<(), String> {
-        if let Some(o) = &mut self.overlay {
+        let notice = if let Some(o) = &mut self.overlay {
             let field = o.field();
-            match field {
-                field if field.is_path() => self.browse(field, window)?,
-                _ => o.activate(),
+            if field.is_path() {
+                self.browse(field, window)?;
+                None
+            } else {
+                o.activate();
+                o.notice.take()
             }
+        } else {
+            None
+        };
+        if let Some(notice) = notice {
+            self.notify(notice);
         }
         Ok(())
     }
@@ -458,7 +498,7 @@ fn logo() -> Result<(Vec<u8>, u32, u32)> {
 fn run(options: Options) -> Result<()> {
     let testing = options.smoke || options.boot_smoke;
     let temp = testing.then(tempfile::tempdir).transpose()?;
-    let source_config = match options.config {
+    let source_config = match &options.config {
         Some(path) => std::path::absolute(path)?,
         None => settings::default_path()?,
     };
@@ -473,15 +513,7 @@ fn run(options: Options) -> Result<()> {
     if testing {
         settings = settings.resolve(source_config.parent().unwrap());
     }
-    if let Some(model) = options.machine {
-        settings.model = model;
-    }
-    if let Some(cpus) = options.cpus {
-        settings.cpus = cpus;
-    }
-    if let Some(display) = options.display {
-        settings.display = display;
-    }
+    options.apply_hardware(&mut settings)?;
     for (dest, source) in [
         (&mut settings.prom, options.prom),
         (&mut settings.cgsix_rom, options.rom),
@@ -501,7 +533,6 @@ fn run(options: Options) -> Result<()> {
             };
         }
     }
-    settings.validate_hardware()?;
     let config = temp
         .as_ref()
         .map_or(source_config, |dir| dir.path().join("heliacal.cfg"));
@@ -910,6 +941,11 @@ fn run(options: Options) -> Result<()> {
                 o.activate();
                 assert_eq!(o.draft.cpus, 2);
                 assert_eq!(app.settings.cpus, 1);
+                o.selected = o.rows().iter().position(|r| r.field == Field::Ram).unwrap();
+                let old_ram = o.draft.ram_mib;
+                o.activate();
+                assert_ne!(o.draft.ram_mib, old_ram);
+                let selected_ram = o.draft.ram_mib;
                 o.selected = 1;
                 o.activate();
                 o.edit = Some("SS20 Solaris".into());
@@ -919,6 +955,7 @@ fn run(options: Options) -> Result<()> {
                 assert_eq!(saved.model, Model::Sparcstation20);
                 assert_eq!(saved.display, Display::Sx);
                 assert_eq!(saved.cpus, 2);
+                assert_eq!(saved.ram_mib, selected_ram);
                 assert_eq!(saved.machines["Original"].cpus, 1);
                 assert_eq!(saved.machines["Original"].model, Model::Sparcstation5);
             }
@@ -1008,5 +1045,90 @@ fn main() {
     if let Err(error) = result {
         eprintln!("Heliacal: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Options {
+        Options::parse_from(args.iter().map(|arg| (*arg).to_string()))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn ram_cli_parses_order_independently_and_rejects_overflow() {
+        for args in [
+            &["--ram-mib", "256", "--machine", "ss5"][..],
+            &["--machine", "ss5", "--ram-mib", "256"][..],
+            &["--ram-mib", "256", "--cpus", "1", "--machine", "ss5"][..],
+        ] {
+            let mut settings = Settings::default();
+            options(args).apply_hardware(&mut settings).unwrap();
+            assert_eq!(settings.model, Model::Sparcstation5);
+            assert_eq!(settings.ram_mib, 256);
+        }
+        for args in [
+            &["--ram-mib"][..],
+            &["--ram-mib", "-1"][..],
+            &["--ram-mib", "4294967296"][..],
+        ] {
+            assert!(
+                Options::parse_from(args.iter().map(|arg| (*arg).to_string())).is_err(),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ram_cli_overrides_named_machine_and_validates_the_final_combination() {
+        let mut settings = Settings::default();
+        settings.save_as_machine("base").unwrap();
+        settings.select_machine("base").unwrap();
+        options(&["--machine-label", "base", "--ram-mib", "256"])
+            .apply_hardware(&mut settings)
+            .unwrap();
+        assert_eq!(settings.ram_mib, 256);
+
+        let mut ss20_sx = Settings {
+            model: Model::Sparcstation20,
+            display: Display::Sx,
+            ..Settings::default()
+        };
+        assert!(
+            options(&["--ram-mib", "512"])
+                .apply_hardware(&mut ss20_sx)
+                .is_err()
+        );
+        let mut ss20_cgsix = Settings {
+            model: Model::Sparcstation20,
+            display: Display::Cgsix,
+            ..Settings::default()
+        };
+        options(&[
+            "--ram-mib",
+            "512",
+            "--machine",
+            "ss20",
+            "--display",
+            "cgsix",
+        ])
+        .apply_hardware(&mut ss20_cgsix)
+        .unwrap();
+        assert_eq!(ss20_cgsix.ram_mib, 512);
+
+        let mut ss5 = Settings::default();
+        assert!(
+            options(&["--ram-mib", "240"])
+                .apply_hardware(&mut ss5)
+                .is_err()
+        );
+        let mut axil = Settings::default();
+        options(&["--machine", "axil320", "--ram-mib", "512"])
+            .apply_hardware(&mut axil)
+            .unwrap();
+        assert_eq!(axil.ram_mib, 512);
     }
 }

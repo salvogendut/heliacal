@@ -4,6 +4,8 @@
 model = "sparcstation5"
 # "cgsix" or "sx" (native SS-20 CG14)
 display = "cgsix"
+# Exact valid DSIMM total for this model/display; 128 is the default.
+# SS-5: up to 256; SS-20/SX: up to 448; SS-20/CGsix or Axil: up to 512 MiB.
 ram_mib = 128
 # Paths are relative to this config's directory. Select your own ROMs in F9.
 prom = ""
@@ -34,6 +36,7 @@ scsi = [
 [machines."SS20 Solaris 2.6"]
 model = "sparcstation20"
 display = "sx"
+ram_mib = 448
 prom = ""
 disk = ""
 cdrom = ""
@@ -41,6 +44,7 @@ network = true
 
 [machines."SS5 Solaris 7"]
 model = "sparcstation5"
+ram_mib = 256
 prom = ""
 cgsix_rom = ""
 disk = ""
@@ -48,6 +52,7 @@ cdrom = ""
 
 [machines."Axil Solaris 2.6"]
 model = "axil320"
+ram_mib = 512
 prom = ""
 cgsix_rom = ""
 disk = ""

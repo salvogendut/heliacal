@@ -8,11 +8,32 @@ Happy Years family: the guest display owns the window, **F9** opens options,
 and a status strip plus machine activity LEDs keep the essential state visible.
 
 The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
-or **Axil 320**. All three use sun4m, **128 MiB RAM**, and a **Sun Type 5 US
-keyboard**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus card. SS-20 can use either
-its native **SX/CG14** framebuffer or a **TurboGX** card; select this with
-**F9 > General > Display** or `--display sx|cgsix`. The native SX option does
-not need a TurboGX ROM. RAM sizes are not selectable.
+or **Axil 320**. All three use sun4m and a **Sun Type 5 US keyboard**, with
+**128 MiB RAM by default**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus
+card. SS-20 can use either its native **SX/CG14** framebuffer or a **TurboGX**
+card; select this with **F9 > General > Display** or `--display sx|cgsix`. The
+native SX option does not need a TurboGX ROM. F9's **Memory** row or
+`--ram-mib` selects any exact DSIMM total supported by the current
+model/display: SS-5 up to 256 MiB, SS-20 with SX up to 448 MiB, and SS-20
+without a VSIMM or Axil 320 up to 512 MiB. Invalid totals are rejected, not
+rounded. The Axil OBP 2.19 profile uses 16/64 MiB banks: 32 MiB total uses
+two 16 MiB banks, while 432/480/496 MiB cannot fit its eight sockets. The
+512 MiB maximum is unchanged. Physical Axil support for smaller modules is
+not established by this firmware-compatible profile.
+
+Solaris 2.6 graphical-console checks pass at 256 MiB on SS-5, 448 MiB on
+SS-20/SX, and 512 MiB on SS-20/CGsix and Axil. These include guest typing
+and capture/release; the MBus configurations use two CPUs. The core also
+passes memory verification and disk write/reboot checks at each maximum.
+These are bounded console checks, not exhaustive desktop compatibility.
+
+For SS-20 with **CGsix** as the Solaris console, use OBP
+`setenv sbus-probe-list f0123` once and reset. The default probe list includes
+the unimplemented DBRI audio slot, which leaves a nameless firmware node and
+causes Solaris 2.6 console discovery to panic even at 128 MiB. This normal
+NVRAM setting keeps onboard SCSI/Ethernet and external slots, and avoids the
+unsupported audio probe. Native SX does not require it. See the
+[core configuration notes](../helios/docs/machines.md#ss-20-cgsix-console-configuration).
 
 **F9 > General > CPUs** selects one or two CPUs on SS-20/Axil; SS-5 is
 fixed at one. Two CPUs use two identical single-CPU MBus modules and are
@@ -57,7 +78,8 @@ cargo run --release --locked
 
 The application opens **paused**. Choose the machine, display and original Sun
 PROM under **F9 > General**. TurboGX requires a 32 KiB FCode ROM; native
-SS-20 SX does not. Save with **F9** and press **Ctrl+P** to boot.
+SS-20 SX does not. Save with **F9** and press **Ctrl+P** to boot. The default
+is 128 MiB; choose **Memory** in F9 for another exact supported total.
 Firmware and guest operating systems are not bundled. The Helios repository
 documents firmware acquisition and expected hashes.
 
@@ -67,9 +89,12 @@ You can also select the machine and supply paths for this session:
 ./target/release/heliacal --machine ss5 \
   --prom ../helios/local/firmware/sun-ss5.bin \
   --cgsix-rom ../helios/local/firmware/turbogx.bin
-./target/release/heliacal --machine ss20 --display sx \
+./target/release/heliacal --machine ss20 --display sx --ram-mib 448 \
   --prom ../helios/local/firmware/ss10-20-v2.25r-rom
-./target/release/heliacal --machine axil320 \
+./target/release/heliacal --machine ss20 --display cgsix --ram-mib 512 \
+  --prom ../helios/local/firmware/ss10-20-v2.25r-rom \
+  --cgsix-rom ../helios/local/firmware/turbogx.bin
+./target/release/heliacal --machine axil320 --ram-mib 512 \
   --prom ../helios/local/firmware/axil320-2-19.bin \
   --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
@@ -165,6 +190,10 @@ model under `<config>.nvram.machines/<hex-encoded-label>/`; hand-written
 stanzas use this separate state unless `legacy_state = true` is set. Save As
 copies settings, including image paths: it does not clone disk images.
 Existing configurations without labels retain their original NVRAM paths.
+RAM is part of each named machine's hardware settings and is included in
+cold-replacement detection. It does not change the label, running machine
+identity or NVRAM path; a saved change applies on the next confirmed F5 cold
+reset, and a failed replacement leaves the prior machine running.
 
 ## Controls
 
@@ -197,9 +226,9 @@ step count, and recent printable serial A output. Serial output is diagnostic
 text, not a terminal emulator. Disk-access changes apply on the next cold reset.
 
 Settings remain a draft until **F9** validates and saves them successfully.
-Display changes then apply immediately. Firmware, media and disk-access changes
-apply at the next **F5 cold reset**; saving them does not interrupt a running
-guest.
+Render options such as smoothing and scanlines apply immediately. Model,
+hardware display, RAM, firmware, media and disk-access changes apply at the
+next **F5 cold reset**; saving them does not interrupt a running guest.
 Choosing **Discard** closes the draft without changing the machine. Reset
 replaces guest RAM and retains NVRAM; shut down a guest OS before resetting or
 quitting.
@@ -214,7 +243,9 @@ The default config is `heliacal.cfg` under:
 
 `--config PATH` selects an independent configuration. Image paths in that
 file are relative to its directory; CLI image paths are relative to the
-working directory. CLI overrides are saved only if you choose Save in F9.
+working directory. CLI overrides, including `--ram-mib`, are saved only if you
+choose Save in F9. `ram_mib` defaults to 128 and must be an exact valid total
+for the selected model/display; named stanzas may omit it to inherit 128.
 The `scsi` array contains exactly seven entries, in ID order (0 through 6),
 each with `kind = "disconnected"`, `"disk"`, or `"cdrom"` and a `path`.
 The early `disk`/`cdrom` config fields migrate to targets 3/6 on load.

@@ -1,5 +1,10 @@
 # Agent notes
 
+- [ram-capacity-completion.md](ram-capacity-completion.md) — final core corrections, 48 frontend tests, maximum-RAM graphical consoles, input/reset/draft checks and cleanup.
+
+- [ram-capacity.md](ram-capacity.md) — issue #3 frontend handoff: shared RAM validation, F9/named-machine selection, actual allocation, cold replacement and acceptance.
+- [ram-capacity-slice-c.md](ram-capacity-slice-c.md) — configurable RAM frontend slice: core-backed choices, selected allocation/video, cold replacement, CLI, tests and smoke evidence.
+
 - [cpu-selection.md](cpu-selection.md) — one/two-CPU settings, named machines, scheduled worker integration, original-firmware smoke and remaining SMP acceptance.
 
 - [build-environment.md](build-environment.md) — reuse the existing local Rust/SDL3 setup.

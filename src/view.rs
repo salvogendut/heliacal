@@ -378,7 +378,7 @@ fn draw_overlay(
     text(c, 136, 122, "HELIACAL / OPTIONS", TEXT)?;
     text(
         c,
-        568,
+        392,
         122,
         &format!(
             "{} / {} MiB",
@@ -490,7 +490,7 @@ fn draw_overlay(
             for (i, line) in [
                 concat!("Heliacal ", env!("CARGO_PKG_VERSION"), " / Happy Years"),
                 "Native Rust + SDL3 frontend for the Helios SPARC emulator.",
-                "Sun SPARCstation 5/20 / Axil 320 / sun4m / SPARC V8 / 128 MiB RAM.",
+                "Sun SPARCstation 5/20 / Axil 320 / sun4m / SPARC V8 / selectable RAM (default 128 MiB).",
                 "Interface conventions follow Prismatic and the Happy Years family.",
                 "Sun Type 5 US keyboard: Pause + A sends Stop-A.",
                 "Guest mouse is connected after capture; audio is not.",
@@ -568,6 +568,8 @@ fn draw_overlay(
             "Enter creates a new label from this draft. Disk images are shared by path."
         } else if o.field() == Field::CpuCount {
             "Enter toggles 1/2 CPUs. Experimental SMP; applies on next cold reset."
+        } else if o.field() == Field::Ram {
+            "Enter cycles valid memory sizes for this model and display."
         } else if o.tab == Tab::Advanced {
             "Arrows navigate / Enter toggles disk access"
         } else if o.tab == Tab::Network {
@@ -583,7 +585,7 @@ fn draw_overlay(
         c,
         144,
         602,
-        "F9 Save   Esc Close   Machine/firmware/media/network apply on next cold reset.",
+        "F9 Save   Esc Close   Hardware changes: confirm F5 to apply.",
         BORDER,
     )?;
     Ok(())

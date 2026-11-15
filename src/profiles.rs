@@ -230,6 +230,45 @@ model = "axil320"
     }
 
     #[test]
+    fn named_ram_sizes_persist_and_switch_without_changing_nvram_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("heliacal.cfg");
+        let mut settings = Settings {
+            ram_mib: 256,
+            ..Settings::default()
+        };
+        let base = dir.path().join("state.nvram");
+        let ss5_nvram = settings.nvram_path(&base);
+        settings.save_as_machine("SS5 large").unwrap();
+        settings.ram_mib = 128;
+        settings.save_as_machine("SS5 default").unwrap();
+        assert_eq!(settings.machines["SS5 large"].ram_mib, 256);
+        assert_eq!(settings.machines["SS5 default"].ram_mib, 128);
+        settings.save(&config).unwrap();
+
+        settings.select_machine("SS5 large").unwrap();
+        assert_eq!(settings.ram_mib, 256);
+        let large_nvram = settings.nvram_path(&base);
+        assert_eq!(large_nvram, ss5_nvram); // The first label adopts legacy state.
+        settings.ram_mib = 232;
+        assert_eq!(settings.nvram_path(&base), large_nvram); // RAM is not identity.
+        settings.ram_mib = 256;
+        settings.select_machine("SS5 default").unwrap();
+        assert_eq!(settings.ram_mib, 128);
+        assert_ne!(settings.nvram_path(&base), large_nvram);
+
+        let mut loaded = Settings::load(&config).unwrap();
+        loaded.select_machine("SS5 large").unwrap();
+        assert_eq!(loaded.ram_mib, 256);
+        loaded.ram_mib = 232;
+        loaded.remember_machine();
+        loaded.save(&config).unwrap();
+        let mut reloaded = Settings::load(&config).unwrap();
+        reloaded.select_machine("SS5 large").unwrap();
+        assert_eq!(reloaded.ram_mib, 232);
+    }
+
+    #[test]
     fn named_stanzas_override_flat_defaults_and_resolve_every_dependency() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("heliacal.cfg");

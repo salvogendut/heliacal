@@ -1,3 +1,4 @@
+use helios::machine::InstalledVideo;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -69,6 +70,13 @@ impl Display {
         match self {
             Self::Cgsix => Self::Sx,
             Self::Sx => Self::Cgsix,
+        }
+    }
+
+    pub const fn installed_video(self) -> InstalledVideo {
+        match self {
+            Self::Cgsix => InstalledVideo::None,
+            Self::Sx => InstalledVideo::Sx,
         }
     }
 }
@@ -260,16 +268,40 @@ impl Settings {
                 self.cpus,
             ));
         }
-        if self.ram_mib != RAM_MIB {
-            return Err("This release supports 128 MiB RAM on SS-5, SS-20 and Axil 320".into());
-        }
         if self.display == Display::Sx && !self.model.supports_sx() {
             return Err(format!(
                 "{} does not have a native SX display",
                 self.model.label()
             ));
         }
+        self.model
+            .profile()
+            .ram_layout(self.ram_bytes()?, self.display.installed_video())
+            .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    pub fn ram_bytes(&self) -> Result<usize, String> {
+        usize::try_from(self.ram_mib)
+            .ok()
+            .and_then(|mib| mib.checked_mul(1024 * 1024))
+            .ok_or_else(|| format!("RAM size overflow: {} MiB", self.ram_mib))
+    }
+
+    /// Exact memory choices supported by the selected model and display.
+    pub fn valid_ram_mib(&self) -> Result<Vec<u32>, String> {
+        let totals = self
+            .model
+            .profile()
+            .valid_ram_totals(self.display.installed_video())
+            .map_err(|error| error.to_string())?;
+        totals
+            .into_iter()
+            .map(|bytes| {
+                u32::try_from(bytes / (1024 * 1024))
+                    .map_err(|_| "RAM size does not fit the settings format".to_string())
+            })
+            .collect()
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -343,6 +375,7 @@ impl Settings {
             && self.model == other.model
             && self.cpus == other.cpus
             && self.display == other.display
+            && self.ram_mib == other.ram_mib
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
             && self.scsi == other.scsi
@@ -504,6 +537,81 @@ mod tests {
     }
 
     #[test]
+    fn ram_choices_come_from_the_shared_core_model_and_display() {
+        let mut settings = Settings::default();
+        let choices = settings.valid_ram_mib().unwrap();
+        assert!(choices.contains(&8) && choices.contains(&128) && choices.contains(&256));
+        assert!(!choices.contains(&240));
+        assert!(settings.validate_hardware().is_ok());
+
+        settings.ram_mib = 232;
+        assert!(settings.validate_hardware().is_ok());
+        assert!(!settings.hardware_eq(&Settings::default()));
+        settings.ram_mib = 240;
+        assert!(settings.validate_hardware().is_err());
+        assert!(!settings.hardware_eq(&Settings::default()));
+
+        settings.model = Model::Sparcstation20;
+        settings.display = Display::Sx;
+        let sx = settings.valid_ram_mib().unwrap();
+        assert!(sx.contains(&448) && !sx.contains(&432) && !sx.contains(&512));
+        settings.ram_mib = 448;
+        assert!(settings.validate_hardware().is_ok());
+        settings.ram_mib = 512;
+        assert!(settings.validate_hardware().is_err());
+
+        settings.display = Display::Cgsix;
+        let cgsix = settings.valid_ram_mib().unwrap();
+        assert!(cgsix.contains(&512) && !cgsix.contains(&496));
+        settings.ram_mib = 512;
+        assert!(settings.validate_hardware().is_ok());
+
+        settings.model = Model::Axil320;
+        assert!(settings.validate_hardware().is_ok());
+        let axil = settings.valid_ram_mib().unwrap();
+        assert!(axil.contains(&32) && axil.contains(&416) && axil.contains(&512));
+        assert!(!axil.contains(&432) && !axil.contains(&480));
+        settings.ram_mib = 480;
+        assert!(settings.validate_hardware().is_err());
+        settings.display = Display::Sx;
+        assert!(settings.validate_hardware().is_err());
+    }
+
+    #[test]
+    fn old_named_records_default_ram_and_inactive_invalid_records_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("heliacal.cfg");
+        fs::write(
+            &config,
+            r#"
+[machines.old]
+model = "sparcstation20"
+display = "sx"
+[machines.invalid]
+model = "sparcstation5"
+ram_mib = 4
+"#,
+        )
+        .unwrap();
+        let error = Settings::load(&config).unwrap_err();
+        assert!(error.contains("Machine 'invalid'"));
+        assert!(error.contains("SPARCstation 5"));
+
+        fs::write(
+            &config,
+            r#"
+[machines.old]
+model = "sparcstation20"
+display = "sx"
+"#,
+        )
+        .unwrap();
+        let settings = Settings::load(&config).unwrap();
+        assert_eq!(settings.machines["old"].ram_mib, RAM_MIB);
+        assert!(settings.machines["old"].validate().is_ok());
+    }
+
+    #[test]
     fn disk_access_defaults_to_read_write_and_roundtrips_read_only() {
         assert!(!Settings::default().disk_read_only);
         assert!(Settings::default().network);
@@ -545,7 +653,7 @@ mod tests {
         assert!(toml::from_str::<Settings>("model = 'ultra5'").is_err());
         assert!(
             Settings {
-                ram_mib: 64,
+                ram_mib: 4,
                 ..Settings::default()
             }
             .validate()
@@ -565,7 +673,7 @@ mod tests {
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), s);
-        s.ram_mib = 256;
+        s.ram_mib = 240;
         assert!(s.save(&path).is_err());
         assert_eq!(Settings::load(&path).unwrap().ram_mib, 128);
         s.ram_mib = 128;
