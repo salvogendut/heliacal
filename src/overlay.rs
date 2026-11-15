@@ -28,6 +28,7 @@ pub enum Field {
     SaveMachineAs,
     Model,
     CpuCount,
+    Ram,
     Display,
     Prom,
     Rom,
@@ -54,6 +55,7 @@ pub struct Overlay {
     pub tab: Tab,
     pub selected: usize,
     pub edit: Option<String>,
+    pub notice: Option<String>,
 }
 impl Overlay {
     pub fn new(settings: &Settings) -> Self {
@@ -62,6 +64,7 @@ impl Overlay {
             tab: Tab::General,
             selected: 0,
             edit: None,
+            notice: None,
         }
     }
     pub fn tabs(&self) -> Vec<Tab> {
@@ -109,11 +112,7 @@ impl Overlay {
                         Field::CpuCount
                     },
                 ),
-                (
-                    "Memory",
-                    format!("{} MiB", self.draft.ram_mib),
-                    Field::Fixed,
-                ),
+                ("Memory", format!("{} MiB", self.draft.ram_mib), Field::Ram),
                 (
                     "Graphics",
                     self.draft.model.graphics(self.draft.display).into(),
@@ -252,11 +251,24 @@ impl Overlay {
                 if !self.draft.model.supports_sx() {
                     self.draft.display = Display::Cgsix;
                 }
+                self.adjust_ram_after_hardware_change();
             }
             Field::CpuCount => self.draft.cpus = if self.draft.cpus == 1 { 2 } else { 1 },
+            Field::Ram => {
+                if let Ok(choices) = self.draft.valid_ram_mib()
+                    && !choices.is_empty()
+                {
+                    let index = choices
+                        .iter()
+                        .position(|&mib| mib == self.draft.ram_mib)
+                        .unwrap_or(0);
+                    self.draft.ram_mib = choices[(index + 1) % choices.len()];
+                }
+            }
             Field::Display => {
                 if self.draft.model.supports_sx() {
                     self.draft.display = self.draft.display.next();
+                    self.adjust_ram_after_hardware_change();
                 }
             }
             Field::DiskAccess => self.draft.disk_read_only ^= true,
@@ -270,6 +282,30 @@ impl Overlay {
             }
         }
     }
+    fn adjust_ram_after_hardware_change(&mut self) {
+        let old = self.draft.ram_mib;
+        let Ok(choices) = self.draft.valid_ram_mib() else {
+            return;
+        };
+        if choices.is_empty() || choices.contains(&old) {
+            return;
+        }
+        let replacement = choices
+            .iter()
+            .rev()
+            .find(|&&mib| mib <= old)
+            .copied()
+            .or_else(|| choices.first().copied());
+        if let Some(replacement) = replacement {
+            self.draft.ram_mib = replacement;
+            self.notice = Some(format!(
+                "Memory adjusted from {old} to {replacement} MiB for {} / {}.",
+                self.draft.model.short_label(),
+                self.draft.display.label()
+            ));
+        }
+    }
+
     pub fn finish_edit(&mut self) -> Result<(), String> {
         if let Some(value) = self.edit.as_ref() {
             if self.field() == Field::SaveMachineAs {
@@ -379,6 +415,77 @@ mod tests {
         assert_eq!(overlay.draft.cpus, 1);
         assert!(!overlay.rows().iter().any(|r| r.field == Field::CpuCount));
         overlay.draft.validate().unwrap();
+    }
+
+    #[test]
+    fn ram_row_cycles_core_choices_without_touching_live_settings() {
+        let settings = Settings::default();
+        let mut overlay = Overlay::new(&settings);
+        let memory = overlay
+            .rows()
+            .into_iter()
+            .find(|row| row.field == Field::Ram)
+            .expect("RAM row");
+        assert_eq!(memory.value, "128 MiB");
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Ram)
+            .unwrap();
+        let choices = overlay.draft.valid_ram_mib().unwrap();
+        let index = choices.iter().position(|&mib| mib == 128).unwrap();
+        overlay.activate();
+        assert_eq!(overlay.draft.ram_mib, choices[(index + 1) % choices.len()]);
+        assert_eq!(settings.ram_mib, 128);
+        assert!(overlay.dirty(&settings));
+    }
+
+    #[test]
+    fn hardware_changes_keep_valid_ram_or_adjust_with_a_visible_notice() {
+        let saved = Settings {
+            model: crate::settings::Model::Sparcstation20,
+            display: Display::Cgsix,
+            ram_mib: 512,
+            ..Settings::default()
+        };
+        let mut overlay = Overlay::new(&saved);
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Model)
+            .unwrap();
+        overlay.activate(); // SS20 -> Axil: 512 remains valid.
+        assert_eq!(overlay.draft.ram_mib, 512);
+        assert!(overlay.notice.is_none());
+        overlay.activate(); // Axil -> SS5: largest valid <=512 is 256.
+        assert_eq!(overlay.draft.ram_mib, 256);
+        assert!(overlay.notice.as_deref().unwrap().contains("512 to 256"));
+        assert_eq!(saved.ram_mib, 512);
+
+        let mut overlay = Overlay::new(&saved);
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Display)
+            .unwrap();
+        overlay.activate(); // CGsix 512 -> SX 448.
+        assert_eq!(overlay.draft.display, Display::Sx);
+        assert_eq!(overlay.draft.ram_mib, 448);
+        assert!(overlay.notice.as_deref().unwrap().contains("512 to 448"));
+
+        let invalid = Settings {
+            ram_mib: 4,
+            ..Settings::default()
+        };
+        let mut overlay = Overlay::new(&invalid);
+        overlay.selected = overlay
+            .rows()
+            .iter()
+            .position(|row| row.field == Field::Model)
+            .unwrap();
+        overlay.activate(); // SS5 -> SS20: minimum becomes 16 MiB.
+        assert_eq!(overlay.draft.ram_mib, 16);
+        assert!(overlay.notice.as_deref().unwrap().contains("4 to 16"));
     }
 
     #[test]

@@ -6,7 +6,8 @@
 - The emulator is the sibling `../helios` library. Inspect its current APIs
   before integrating. Keep CPU/device changes there; read its AGENTS.md and
   relevant architecture documentation before changing the core.
-- Support Sun SPARCstation 5, SPARCstation 20 and Axil 320 at 128 MiB RAM.
+- Support Sun SPARCstation 5, SPARCstation 20 and Axil 320 with 128 MiB RAM by
+  default and the exact valid RAM totals for the selected model/display.
   Map the selected model to a Helios `MachineProfile`. SS-20 offers native
   SX/CG14 or a TurboGX SBus card; SS-5 and Axil 320 require TurboGX. Validate
   the model/display combination in construction and keep per-machine NVRAM

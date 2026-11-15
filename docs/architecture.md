@@ -54,10 +54,13 @@ motion and left/middle/right buttons are queued as Sun Mouse Systems packets on
 SCC channel B; focus loss and capture release send button releases.
 
 `settings.rs` serializes a strict TOML schema and selects SS-5, SS-20 or Axil
-320 at 128 MiB RAM. The model maps to a Helios `MachineProfile`. SS-20 exposes
-a display choice: native SX/CG14 (no TurboGX ROM) or a TurboGX SBus card.
-SS-5 and Axil 320 require TurboGX. Selecting CG6 on SS-20 removes the SX device
-so the firmware uses the SBus card. Configured image sizes/readability and read/write disk access are
+320 with an exact valid RAM total (128 MiB default). The model/display choice
+delegates RAM validation and choices to the Helios profile API; RAM is part of
+cold-replacement detection but not machine identity or NVRAM paths. SS-20
+exposes a display choice: native SX/CG14 (no TurboGX ROM) or a TurboGX SBus
+card. SS-5 and Axil 320 require TurboGX. CGsix construction selects the
+no-VSIMM core path directly rather than removing SX after allocation.
+Configured image sizes/readability and read/write disk access are
 validated on save. Empty firmware paths are valid for an unconfigured desktop;
 Boot reports what's missing. Paths are resolved relative to the config
 directory. Saving uses a synced temporary file in the destination directory and
@@ -97,3 +100,11 @@ block size, and machine construction attaches every populated target.
 Firmware compatibility and OS support remain properties of the evolving
 Helios core. Unsupported core operations keep the last framebuffer visible,
 with a persistent error and a full fault on stderr.
+
+RAM choices come from the core's profile/video layout validation, including
+Axil OBP 2.19's 16/64 MiB bank restriction. The frontend does not maintain a
+second module-size table. Tracked RAM acceptance tests independently enumerate
+socket populations and exercise the actual F5 worker replacement: a guest
+write/read at 192 MiB distinguishes 128 MiB from 256 MiB installation. Cancel,
+Discard, failed Save and failed construction preserve the previous machine,
+catalog and NVRAM identity.

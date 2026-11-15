@@ -1,5 +1,9 @@
 # Configurable RAM frontend handoff
 
+Status update: implementation and acceptance are complete; see the
+[completion review](ram-capacity-completion.md). The original handoff below
+records the earlier checkpoint.
+
 Prepared 2026-11-15 for [Helios issue #3](https://github.com/salvogendut/helios/issues/3).
 
 The authoritative implementation plan is

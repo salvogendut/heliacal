@@ -1,4 +1,4 @@
-use crate::settings::{Display, Model, RAM_MIB, SCSI_TARGETS, Settings, TargetKind, atomic_write};
+use crate::settings::{Display, Model, SCSI_TARGETS, Settings, TargetKind, atomic_write};
 use helios::{
     devices::{
         cgsix::{Cgsix, HEIGHT, WIDTH},
@@ -245,32 +245,37 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         settings.model.prom_label(),
         helios::machine::MAX_PROM_BYTES,
     )?;
-    let mut machine = Machine::with_profile_processors(
+    let graphics = match settings.display {
+        Display::Sx => {
+            if !settings.model.supports_sx() {
+                return Err(format!(
+                    "{} does not have a native SX display",
+                    settings.model.label()
+                ));
+            }
+            None
+        }
+        Display::Cgsix => {
+            if settings.cgsix_rom.is_empty() {
+                return Err(format!(
+                    "Select a TurboGX FCode ROM for {} in F9 > General before booting",
+                    settings.model.label()
+                ));
+            }
+            let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
+            Some(Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?)
+        }
+    };
+    let mut machine = Machine::with_profile_processors_video(
         profile,
-        RAM_MIB as usize * 1024 * 1024,
+        settings.ram_bytes()?,
         &prom,
         nvram,
         usize::from(settings.cpus),
+        settings.display.installed_video(),
     )
     .map_err(|e| e.to_string())?;
-    if settings.display == Display::Sx {
-        if !settings.model.supports_sx() {
-            return Err(format!(
-                "{} does not have a native SX display",
-                settings.model.label()
-            ));
-        }
-    } else if settings.cgsix_rom.is_empty() {
-        return Err(format!(
-            "Select a TurboGX FCode ROM for {} in F9 > General before booting",
-            settings.model.label()
-        ));
-    } else {
-        let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
-        let graphics = Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?;
-        if matches!(settings.model, Model::Sparcstation20) {
-            machine.remove_sx();
-        }
+    if let Some(graphics) = graphics {
         machine.install_cgsix(graphics).map_err(|e| e.to_string())?;
     }
     let devices = machine.bus.devices_mut().unwrap();
@@ -770,6 +775,59 @@ mod tests {
         assert!(machine.bus.sx().is_none() && machine.bus.cgsix().is_some());
     }
     #[test]
+    fn worker_build_uses_selected_ram_and_video_without_a_transient_sx() {
+        use crate::settings::Model;
+        const MIB: u64 = 1024 * 1024;
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        let rom = dir.path().join("rom");
+        fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
+        fs::write(&rom, vec![0; 32768]).unwrap();
+        for (model, display, ram_mib, sx, cgsix) in [
+            (Model::Sparcstation5, Display::Cgsix, 256, false, true),
+            (Model::Sparcstation20, Display::Sx, 448, true, false),
+            (Model::Sparcstation20, Display::Cgsix, 512, false, true),
+            (Model::Axil320, Display::Cgsix, 512, false, true),
+        ] {
+            let settings = Settings {
+                model,
+                display,
+                ram_mib,
+                prom: prom.display().to_string(),
+                cgsix_rom: rom.display().to_string(),
+                ..Settings::default()
+            };
+            let machine = build(&settings, Nvram::default()).unwrap();
+            let dram = machine.bus.dram().unwrap();
+            let aperture = if model == Model::Sparcstation20 && display == Display::Sx {
+                512
+            } else {
+                ram_mib
+            };
+            assert_eq!(dram.aperture_bytes(), u64::from(aperture) * MIB);
+            assert_eq!(
+                dram.bank_sizes().iter().sum::<usize>() as u64,
+                u64::from(ram_mib) * MIB,
+                "{model:?}/{display:?}"
+            );
+            assert_eq!(machine.bus.sx().is_some(), sx, "{model:?}/{display:?}");
+            assert_eq!(
+                machine.bus.cgsix().is_some(),
+                cgsix,
+                "{model:?}/{display:?}"
+            );
+        }
+
+        let invalid = Settings {
+            ram_mib: 240,
+            prom: prom.display().to_string(),
+            cgsix_rom: rom.display().to_string(),
+            ..Settings::default()
+        };
+        assert!(build(&invalid, Nvram::default()).is_err());
+    }
+
+    #[test]
     fn all_seven_scsi_ids_honor_the_selected_access_mode() {
         use crate::settings::{ScsiTarget, TargetKind};
         let dir = tempfile::tempdir().unwrap();
@@ -854,6 +912,7 @@ mod tests {
         .unwrap();
         fs::write(dir.path().join("gx"), vec![0; 32768]).unwrap();
         let settings = Settings {
+            ram_mib: 256,
             prom: dir.path().join("prom").display().to_string(),
             cgsix_rom: dir.path().join("gx").display().to_string(),
             ..Settings::default()
@@ -861,12 +920,28 @@ mod tests {
         let state_path = dir.path().join("state.nvram");
         let emu = Emulator::new(state_path.clone()).unwrap();
         assert_eq!(emu.snapshot().phase, Phase::Ready);
-        emu.boot(settings).unwrap();
+        emu.boot(settings.clone()).unwrap();
         wait(&emu, |s| s.serial.contains("HELIOS"));
         emu.pause().unwrap();
         let paused = wait(&emu, |s| s.phase == Phase::Paused);
+        assert!(
+            paused
+                .machine_description
+                .as_deref()
+                .is_some_and(|description| description.contains("256 MiB"))
+        );
         thread::sleep(Duration::from_millis(50));
         assert_eq!(emu.snapshot().steps, paused.steps);
+        emu.boot(Settings {
+            ram_mib: 240,
+            ..settings
+        })
+        .unwrap();
+        let failed_ram = wait(&emu, |s| {
+            s.error.as_deref().is_some_and(|e| e.contains("RAM"))
+        });
+        assert_eq!(failed_ram.phase, Phase::Paused);
+        assert_eq!(failed_ram.steps, paused.steps);
         emu.boot(Settings::default()).unwrap();
         let failed = wait(&emu, |s| s.error.is_some());
         assert_eq!(failed.phase, Phase::Paused);
