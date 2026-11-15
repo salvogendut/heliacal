@@ -19,6 +19,9 @@ cgsix_rom = ""
 smoothing = false
 scanlines = false
 show_status = true
+# Shared presentation preference: F9 > Advanced > Serial console view.
+# Applies on Save without resetting a headless guest; PTY stays available.
+show_serial_console = true
 tinker = false
 network = true
 

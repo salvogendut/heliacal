@@ -17,6 +17,18 @@ guest. CPU execution and device time remain in Helios.
    minicom -o -8 -b 9600 -D /tmp/heliacal-ss20
    ```
 
+**Advanced > Serial console view** shows the serial output inside Heliacal's
+window. It defaults to **On** and is gated by Tinker. Save applies this view
+preference immediately, without a cold reset. Off returns to the connection
+information panel; the PTY and terminal state keep running while hidden.
+
+The embedded view is an 80-column, 24-row output screen with wrapping,
+scrolling, cursor positioning, erase commands, ANSI colours and underline.
+Use minicom for keyboard input. Both views receive the same original SCC A
+bytes; showing the embedded screen does not consume bytes from the PTY.
+The current ASCII font substitutes `?` for unsupported glyphs. There is no
+scrollback history or terminal-query reply injection from the embedded view.
+
 Use **9600 baud, 8 data bits, no parity, 1 stop bit**, with hardware and software
 flow control off. `-o` skips modem initialization. Connect one terminal client
 at a time. Leaving minicom with Ctrl+A, X leaves the guest running. Reconnect
@@ -53,9 +65,15 @@ relative to the configuration file. `--headless`, `--graphical`, and
 paths are relative to the launch directory. Save makes overrides persistent.
 Turning Tinker off hides these controls without changing the running machine.
 
-Headless machines do not load a TurboGX ROM. The graphical `display` choice is
-remembered. Maximum RAM is 256 MiB for SS-5 and 512 MiB for SS-20/Axil. Switching
-an SS-20 draft from headless 512 MiB back to SX visibly adjusts it to 448 MiB;
+The shared desktop setting `show_serial_console = true` controls the embedded
+view; it is a presentation preference like smoothing, rather than per-machine
+hardware. It is saved at the top level of the configuration.
+
+Headless machines do not load a TurboGX ROM. The General **Display** row shows
+**Headless** and is disabled while headless mode is on. The graphical `display`
+choice is remembered and becomes editable again when headless mode is off.
+Maximum RAM is 256 MiB for SS-5 and 512 MiB for SS-20/Axil. Switching an SS-20
+draft from headless 512 MiB back to SX visibly adjusts it to 448 MiB;
 Save and confirmed F5 apply the change. The machine label and NVRAM path do not
 change when the console mode changes.
 

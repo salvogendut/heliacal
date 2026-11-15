@@ -222,8 +222,9 @@ Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
 RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
 can be hidden. **Advanced** selects hard-disk read/write or read-only access.
 **General > Tinker** enables the Advanced diagnostics block with the core PC,
-step count, and recent printable serial A output. Serial output is diagnostic
-text, not a terminal emulator. Disk-access changes apply on the next cold reset.
+step count and a recent printable serial A excerpt. **Advanced > Serial console
+view** toggles the full terminal-style output view for headless guests; Save
+applies it immediately. Disk-access changes apply on the next cold reset.
 
 Settings remain a draft until **F9** validates and saves them successfully.
 Render options such as smoothing and scanlines apply immediately. Model,
@@ -271,8 +272,9 @@ checkpoint; startup may take several minutes.
 Enable **F9 > General > Tinker**, then **Advanced > Headless guest**. An optional
 **Serial PTY symlink** gives the machine a stable path, for example
 `/tmp/heliacal-ss20`. Save and boot, or confirm F5 after cleanly halting the guest.
-The Heliacal control window remains open and shows the active endpoint and
-minicom command. **Open serial terminal** and **Send serial BREAK** are also in
+The Heliacal control window remains open and shows an 80x24 serial output
+screen, the active endpoint and minicom command. **Advanced > Serial console
+view** hides or shows that screen on Save, without restarting the guest. **Open serial terminal** and **Send serial BREAK** are also in
 Advanced. No framebuffer ROM is needed; SS-20 headless supports 512 MiB RAM.
 
 Original firmware needs initialized NVRAM; initialize a new machine graphically
@@ -298,8 +300,9 @@ mouse capture/release, and a 20-pixel title-bar drag with an unchanged
 translated client image. A typed guest halt completes filesystem sync and
 returns to the graphical OBP prompt. These are specific installed-disk and
 desktop checkpoints; SX instruction coverage and full POST remain incomplete.
-Audio, interactive serial,
-clipboard-to-guest paste, and additional models are not provided yet. Host
+Serial keyboard input is available through the PTY; the embedded screen is an
+output view. Audio, in-window serial keyboard input, clipboard-to-guest paste,
+and additional models are not provided yet. Host
 networking is available as user-mode NAT: enable it in F9 > Network, then
 configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
 network (gateway 192.168.0.1), for example:

@@ -126,3 +126,24 @@ The control panel displays the running endpoint, not an unsaved draft. Mode
 and alias changes use the existing confirmed cold-replacement transaction;
 failed replacement retains the old machine and PTY. `terminal.rs` runs only
 on an explicit Advanced action and uses argument vectors, never a shell.
+
+`serial_screen.rs` feeds the same raw SCC bytes into the pinned `vt100` parser
+on the worker, independent of visibility. Its 80x24 screen has no scrollback;
+the parser's default features are disabled to bound VTE OSC storage to 1024
+bytes. Changed immutable screen snapshots are published with normal status
+updates, at most roughly 30 times per second. SDL redraws the embedded view
+when its generation changes and groups adjacent cells with matching attributes.
+The renderer supports ANSI colours, underline and a static cursor using the
+existing ASCII glyph font. Terminal callbacks remain inert: the view sends no
+replies, keyboard input, clipboard operations or resize requests to the guest.
+
+The global `show_serial_console` preference is Tinker-gated in Advanced and
+applies on Save; it is excluded from hardware replacement and named-machine
+state. Disabling it leaves both the parser and PTY running, so the next visible
+snapshot is current. A cold replacement resets parser state together with the
+frame cache. General's Display row is fixed/grey while headless, showing
+Headless without changing the remembered graphical display choice.
+
+Parser reference: [vt100 0.18.1](https://docs.rs/crate/vt100/0.18.1), pinned in
+Cargo.lock. The no-std feature selection here bounds parser buffers; the
+frontend itself remains a normal std application.

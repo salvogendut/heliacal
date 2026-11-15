@@ -62,6 +62,39 @@ fn tinker_gates_controls_and_headless_to_sx_adjusts_only_the_draft() {
     assert_eq!(overlay.edit, Some(String::new()));
 }
 #[test]
+fn serial_view_is_a_tinker_gated_saved_preference_without_hardware_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("heliacal.cfg");
+    let settings = Settings {
+        headless: true,
+        ..Settings::default()
+    };
+    let mut overlay = Overlay::new(&settings);
+    overlay.tab = overlay::Tab::Advanced;
+    assert!(
+        !overlay
+            .rows()
+            .iter()
+            .any(|row| row.field == Field::SerialConsole)
+    );
+    overlay.draft.tinker = true;
+    overlay.selected = overlay
+        .rows()
+        .iter()
+        .position(|row| row.field == Field::SerialConsole)
+        .unwrap();
+    overlay.activate();
+    assert!(!overlay.draft.show_serial_console);
+    assert!(settings.show_serial_console); // Unsaved draft leaves live presentation alone.
+    assert!(settings.hardware_eq(&overlay.draft));
+    overlay.draft.save(&config).unwrap();
+    let saved = Settings::load(&config).unwrap();
+    assert!(!saved.show_serial_console);
+    assert!(saved.headless);
+    assert!(toml::from_str::<Settings>("").unwrap().show_serial_console);
+}
+
+#[test]
 fn headless_cli_validates_final_topology_independent_of_argument_order() {
     for args in [
         vec![
@@ -128,6 +161,7 @@ fn headless_worker_transports_raw_serial_and_retains_guest_after_alias_collision
     emulator.boot(settings.clone()).unwrap();
     let running = wait(&|s| s.serial.contains("HELIOS"));
     assert!(running.headless);
+    assert_eq!(running.serial_screen.contents(), "HELIOS");
     assert!(running.error.is_none());
     let target = fs::read_link(&alias).unwrap();
     let mut client = fs::OpenOptions::new()
@@ -155,7 +189,8 @@ fn headless_worker_transports_raw_serial_and_retains_guest_after_alias_collision
     assert_eq!(rejected.steps, paused.steps);
     assert_eq!(fs::read_link(&alias).unwrap(), target);
     emulator.pause().unwrap();
-    wait(&|s| s.serial.ends_with("Z\n"));
+    let echoed = wait(&|s| s.serial.ends_with("Z\n"));
+    assert_eq!(echoed.serial_screen.contents(), "HELIOSZ");
     let mut raw = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !raw.ends_with(b"Z\n") {
@@ -170,7 +205,9 @@ fn headless_worker_transports_raw_serial_and_retains_guest_after_alias_collision
     }
     assert_eq!(raw, b"HELIOSZ\n");
     emulator.boot(settings).unwrap();
-    wait(&|s| s.serial == "HELIOS" && s.error.is_none());
+    let reset = wait(&|s| s.serial == "HELIOS" && s.error.is_none());
+    assert_eq!(reset.serial_screen.contents(), "HELIOS");
+    assert!(reset.serial_frame > echoed.serial_frame);
     assert_eq!(fs::read_link(&alias).unwrap(), target); // F5 keeps attached minicom alive.
     emulator.shutdown().unwrap();
     wait(&|s| s.phase == Phase::Stopped);

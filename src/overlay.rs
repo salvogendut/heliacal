@@ -38,6 +38,7 @@ pub enum Field {
     SerialPtyLink,
     OpenSerialTerminal,
     SerialBreak,
+    SerialConsole,
     Network,
     Smoothing,
     Scanlines,
@@ -129,7 +130,19 @@ impl Overlay {
                     },
                     Field::Fixed,
                 ),
-                ("Display", self.draft.display.label().into(), Field::Display),
+                (
+                    "Display",
+                    if self.draft.headless {
+                        "Headless".into()
+                    } else {
+                        self.draft.display.label().into()
+                    },
+                    if self.draft.headless {
+                        Field::Fixed
+                    } else {
+                        Field::Display
+                    },
+                ),
                 (
                     self.draft.model.prom_label(),
                     path_label(&self.draft.prom),
@@ -219,6 +232,11 @@ impl Overlay {
                             "Send serial BREAK",
                             "Interrupt the running guest console".into(),
                             Field::SerialBreak,
+                        ),
+                        (
+                            "Serial console view",
+                            on_off(self.draft.show_serial_console),
+                            Field::SerialConsole,
                         ),
                     ]);
                 }
@@ -319,6 +337,7 @@ impl Overlay {
                 self.draft.headless ^= true;
                 self.adjust_ram_after_hardware_change();
             }
+            Field::SerialConsole => self.draft.show_serial_console ^= true,
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,

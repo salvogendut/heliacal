@@ -9,6 +9,7 @@ mod profiles;
 #[cfg(test)]
 mod ram_acceptance_tests;
 mod serial_pty;
+mod serial_screen;
 mod settings;
 mod terminal;
 mod view;
@@ -647,6 +648,7 @@ fn run(options: Options) -> Result<()> {
     let mut last_notice: Option<String> = None;
     let mut last_captured = false;
     let mut last_serial_status = (None, None, 0);
+    let mut last_serial_frame = 0;
     let mut last_shutdown_failed = false;
     let mut redraw = true;
     let mut grabbed: Option<bool> = None;
@@ -808,6 +810,12 @@ fn run(options: Options) -> Result<()> {
         if serial_status != last_serial_status {
             redraw = true;
             last_serial_status = serial_status;
+        }
+        if state.serial_frame != last_serial_frame {
+            if state.headless && app.settings.show_serial_console {
+                redraw = true;
+            }
+            last_serial_frame = state.serial_frame;
         }
         if state.phase != last_phase
             || state.has_machine != last_has_machine

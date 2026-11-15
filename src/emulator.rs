@@ -57,6 +57,8 @@ pub struct Snapshot {
     /// Scheduler outcomes by populated module (hardware processors 0 and 2).
     pub processor_steps: [u64; 2],
     pub serial: String,
+    pub serial_screen: Arc<vt100::Screen>,
+    pub serial_frame: u64,
     pub headless: bool,
     pub serial_endpoint: Option<String>,
     pub serial_error: Option<String>,
@@ -81,6 +83,8 @@ impl Default for Snapshot {
             secondary_pc: None,
             processor_steps: [0; 2],
             serial: String::new(),
+            serial_screen: Arc::new(vt100::Parser::default().screen().clone()),
+            serial_frame: 0,
             headless: false,
             serial_endpoint: None,
             serial_error: None,
@@ -121,6 +125,7 @@ struct Input {
 struct FrameCache {
     pixels: Vec<u32>,
     scanout: Option<u64>,
+    console: crate::serial_screen::SerialScreen,
 }
 
 pub struct Emulator {
@@ -395,6 +400,10 @@ fn publish(
         blit_pixels(state, frame_cache, sx.generation() ^ (1 << 63), |pixels| {
             sx.pixels(pixels)
         });
+    }
+    if let Some(screen) = frame_cache.console.publish() {
+        state.serial_screen = screen;
+        state.serial_frame = state.serial_frame.wrapping_add(1);
     }
     state.pc = machine.cpu.pc();
     state.secondary_pc = machine.secondary_cpu().map(|module| module.cpu.pc());
@@ -705,6 +714,7 @@ fn run(
         if let Some(p) = &mut serial.pty {
             p.send(&bytes);
         }
+        frame_cache.console.process(&bytes);
         for byte in bytes {
             match byte {
                 b'\n' => state.serial.push('\n'),

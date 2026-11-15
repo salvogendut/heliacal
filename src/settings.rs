@@ -184,6 +184,7 @@ pub struct Settings {
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
+    pub show_serial_console: bool,
     pub tinker: bool,
 }
 
@@ -213,6 +214,7 @@ impl Default for Settings {
             smoothing: false,
             scanlines: false,
             show_status: true,
+            show_serial_console: true,
             tinker: false,
         }
     }
