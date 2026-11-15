@@ -1,5 +1,7 @@
 # Agent notes
 
+- [headless-pty-completion.md](headless-pty-completion.md) — implemented headless/TTYA PTY controls, original-OBP console selection, minicom/Solaris acceptance, lifecycle and cleanup.
+
 - [headless-pty-console.md](headless-pty-console.md) — issue #1: Tinker-gated headless guest startup, raw serial PTY, stable alias, optional minicom launcher and acceptance slices.
 
 - [ram-capacity-completion.md](ram-capacity-completion.md) — final core corrections, 48 frontend tests, maximum-RAM graphical consoles, input/reset/draft checks and cleanup.

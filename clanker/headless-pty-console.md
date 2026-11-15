@@ -2,9 +2,10 @@
 
 Prepared 2026-11-15 for [Heliacal issue #1](https://github.com/salvogendut/heliacal/issues/1).
 Branch: `feat/headless-pty-console`, starting at Heliacal `39f9691` with Helios
-`ac4dcdf`. This is the implementation plan; no headless/PTY feature is claimed
-implemented by this documentation commit. The reviewed baseline is 48 frontend
-tests and 624 normal / 626 perf-counter core tests.
+`ac4dcdf`. This document preserves the initial implementation plan. For completed work and
+acceptance results, see [headless-pty-completion.md](headless-pty-completion.md).
+The starting baseline was 48 frontend tests and 624 normal / 626 perf-counter
+core tests.
 
 ## User decisions and scope
 

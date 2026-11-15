@@ -81,7 +81,76 @@ pub fn draw(
     c.clear();
     c.set_blend_mode(BlendMode::Blend);
     let destination = guest_rect(p.settings.show_status);
-    if p.state.has_machine {
+    if p.state.has_machine && p.state.headless {
+        text(c, 144, 200, "HEADLESS WORKSTATION / SERIAL TTYA", ACCENT)?;
+        text(
+            c,
+            144,
+            240,
+            p.state.machine_description.as_deref().unwrap_or("Helios"),
+            TEXT,
+        )?;
+        text(
+            c,
+            144,
+            280,
+            "Connect from a terminal (9600 8N1, flow control off):",
+            MUTED,
+        )?;
+        if let Some(endpoint) = &p.state.serial_endpoint {
+            let recipe = crate::terminal::recipe(endpoint);
+            for (i, line) in recipe.as_bytes().chunks(82).enumerate() {
+                text(
+                    c,
+                    144,
+                    310 + i as i32 * 20,
+                    &String::from_utf8_lossy(line),
+                    TEXT,
+                )?;
+            }
+        }
+        text(
+            c,
+            144,
+            400,
+            "F9 > Advanced: Open serial terminal / Send serial BREAK",
+            MUTED,
+        )?;
+        text(
+            c,
+            144,
+            430,
+            "Enable Tinker in General to show these controls.",
+            MUTED,
+        )?;
+        text(
+            c,
+            144,
+            480,
+            "Ctrl+P Pause/resume   F5 Cold reset   F12 Quit",
+            TEXT,
+        )?;
+        if let Some(error) = &p.state.serial_error {
+            text(
+                c,
+                144,
+                530,
+                &error.chars().take(82).collect::<String>(),
+                ACCENT,
+            )?;
+        } else if p.state.serial_dropped != 0 {
+            text(
+                c,
+                144,
+                530,
+                &format!(
+                    "Slow/disconnected terminal: {} old output bytes discarded",
+                    p.state.serial_dropped
+                ),
+                ACCENT,
+            )?;
+        }
+    } else if p.state.has_machine {
         c.copy(guest, None, destination)?;
         if p.settings.scanlines {
             for y in (destination.y()..destination.bottom()).step_by(3) {
@@ -116,7 +185,11 @@ pub fn draw(
             &format!(
                 "{} MiB RAM  /  {}",
                 p.settings.ram_mib,
-                machine.graphics(p.settings.display)
+                if p.settings.headless {
+                    "Headless / serial TTYA"
+                } else {
+                    machine.graphics(p.settings.display)
+                }
             ),
             MUTED,
         )?;
@@ -127,7 +200,7 @@ pub fn draw(
             &format!(
                 "F9  Select {}{}",
                 machine.prom_label(),
-                if p.settings.display == crate::settings::Display::Sx {
+                if p.settings.headless || p.settings.display == crate::settings::Display::Sx {
                     ""
                 } else {
                     " and TurboGX ROM"
@@ -448,7 +521,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    300,
+                    396,
                     &if let Some(pc2) = state.secondary_pc {
                         format!(
                             "CPU0 {:08x} / CPU2 {:08x} / {} + {} steps",
@@ -462,16 +535,16 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    324,
+                    420,
                     "Serial A output (recent printable text):",
                     MUTED,
                 )?;
-                let lines: Vec<_> = state.serial.lines().rev().take(11).collect();
+                let lines: Vec<_> = state.serial.lines().rev().take(5).collect();
                 for (i, line) in lines.iter().rev().enumerate() {
                     text(
                         c,
                         144,
-                        348 + i as i32 * 18,
+                        444 + i as i32 * 18,
                         &line.chars().take(82).collect::<String>(),
                         TEXT,
                     )?;
@@ -480,7 +553,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    300,
+                    396,
                     "Diagnostics are hidden. Enable Tinker in General.",
                     MUTED,
                 )?;
@@ -571,7 +644,7 @@ fn draw_overlay(
         } else if o.field() == Field::Ram {
             "Enter cycles valid memory sizes for this model and display."
         } else if o.tab == Tab::Advanced {
-            "Arrows navigate / Enter toggles disk access"
+            "Enter changes settings / edits path / runs action. Save + F5 applies hardware."
         } else if o.tab == Tab::Network {
             "Arrows navigate / Enter toggles host networking"
         } else if o.tab == Tab::Media {

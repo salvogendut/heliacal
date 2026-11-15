@@ -12,6 +12,10 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 tempfile = "3"
 png = "0.18"
+crc32fast = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["term", "fs"] }
 
 [profile.dev.package.helios]
 opt-level = 2

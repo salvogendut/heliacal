@@ -1,3 +1,4 @@
+use crate::serial_pty::SerialPty;
 use crate::settings::{Display, Model, SCSI_TARGETS, Settings, TargetKind, atomic_write};
 use helios::{
     devices::{
@@ -56,6 +57,10 @@ pub struct Snapshot {
     /// Scheduler outcomes by populated module (hardware processors 0 and 2).
     pub processor_steps: [u64; 2],
     pub serial: String,
+    pub headless: bool,
+    pub serial_endpoint: Option<String>,
+    pub serial_error: Option<String>,
+    pub serial_dropped: u64,
     pub error: Option<String>,
     pub has_machine: bool,
     pub machine_name: Option<String>,
@@ -76,6 +81,10 @@ impl Default for Snapshot {
             secondary_pc: None,
             processor_steps: [0; 2],
             serial: String::new(),
+            headless: false,
+            serial_endpoint: None,
+            serial_error: None,
+            serial_dropped: 0,
             error: None,
             has_machine: false,
             machine_name: None,
@@ -90,6 +99,7 @@ impl Default for Snapshot {
 enum Command {
     Boot(Box<Settings>),
     Pause,
+    SerialBreak,
     Shutdown,
 }
 
@@ -149,6 +159,9 @@ impl Emulator {
     }
     pub fn pause(&self) -> Result<(), String> {
         self.send(Command::Pause)
+    }
+    pub fn serial_break(&self) -> Result<(), String> {
+        self.send(Command::SerialBreak)
     }
     pub fn shutdown(&self) -> Result<(), String> {
         // Hold the publication lock until the previous failure is cleared.
@@ -245,25 +258,30 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         settings.model.prom_label(),
         helios::machine::MAX_PROM_BYTES,
     )?;
-    let graphics = match settings.display {
-        Display::Sx => {
-            if !settings.model.supports_sx() {
-                return Err(format!(
-                    "{} does not have a native SX display",
-                    settings.model.label()
-                ));
+    let nvram = crate::obp_console::select(settings.model, &prom, nvram, settings.headless)?;
+    let graphics = if settings.headless {
+        None
+    } else {
+        match settings.display {
+            Display::Sx => {
+                if !settings.model.supports_sx() {
+                    return Err(format!(
+                        "{} does not have a native SX display",
+                        settings.model.label()
+                    ));
+                }
+                None
             }
-            None
-        }
-        Display::Cgsix => {
-            if settings.cgsix_rom.is_empty() {
-                return Err(format!(
-                    "Select a TurboGX FCode ROM for {} in F9 > General before booting",
-                    settings.model.label()
-                ));
+            Display::Cgsix => {
+                if settings.cgsix_rom.is_empty() {
+                    return Err(format!(
+                        "Select a TurboGX FCode ROM for {} in F9 > General before booting",
+                        settings.model.label()
+                    ));
+                }
+                let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
+                Some(Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?)
             }
-            let rom = read_rom(&settings.cgsix_rom, "TurboGX ROM (32 KiB)", 32768)?;
-            Some(Cgsix::new(&rom).map_err(|e| format!("TurboGX ROM: {e:?}"))?)
         }
     };
     let mut machine = Machine::with_profile_processors_video(
@@ -272,7 +290,7 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         &prom,
         nvram,
         usize::from(settings.cpus),
-        settings.display.installed_video(),
+        settings.installed_video(),
     )
     .map_err(|e| e.to_string())?;
     if let Some(graphics) = graphics {
@@ -408,6 +426,67 @@ fn step_machine(machine: &mut Machine) -> Result<u8, SchedulerError> {
     }
 }
 
+#[derive(Default)]
+struct SerialBridge {
+    pty: Option<SerialPty>,
+    epoch: u64,
+    break_pending: bool,
+    break_active: bool,
+    break_until_step: u64,
+}
+impl SerialBridge {
+    fn service(&mut self, machine: &mut Machine, running: bool, state: &mut Snapshot) {
+        let Some(pty) = &mut self.pty else {
+            return;
+        };
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        let epoch = serial.receiver_epoch(Channel::A);
+        if epoch != self.epoch {
+            // A receiver reset discards input belonging to the previous session.
+            pty.clear_input();
+            self.epoch = epoch;
+            self.break_active = false;
+            self.break_pending = false;
+        }
+        if let Err(error) = pty.poll() {
+            state.serial_error = Some(error);
+        }
+        state.serial_dropped = pty.dropped;
+        if !running {
+            return;
+        }
+        if self.break_active {
+            // Hold across at least 1M execution outcomes, as in the accepted
+            // original-OBP BREAK fixture. One batch can miss firmware polling.
+            // This is an input pulse, not an advance of guest device time.
+            if state.steps < self.break_until_step {
+                return;
+            }
+            match serial.set_break(Channel::A, false) {
+                Ok(()) => self.break_active = false,
+                Err(helios::bus::BusErrorKind::WouldBlock) => {}
+                Err(e) => {
+                    state.serial_error = Some(format!("Serial BREAK release: {e:?}"));
+                    self.break_active = false;
+                }
+            }
+        } else if self.break_pending && serial.receiver_enabled(Channel::A) {
+            self.break_pending = false;
+            match serial.set_break(Channel::A, true) {
+                Ok(()) => {
+                    self.break_active = true;
+                    self.break_until_step = state.steps.saturating_add(1_000_000);
+                }
+                Err(e) => state.serial_error = Some(format!("Serial BREAK: {e:?}")),
+            }
+        } else if let Some(&byte) = pty.input.front()
+            && serial.receive(Channel::A, byte)
+        {
+            pty.input.pop_front();
+        }
+    }
+}
+
 fn run(
     receive: mpsc::Receiver<Command>,
     shared: Arc<Mutex<Snapshot>>,
@@ -425,6 +504,7 @@ fn run(
     let mut pending_keys: VecDeque<(u8, bool)> = VecDeque::new();
     let mut pending_mouse: VecDeque<MouseEvent> = VecDeque::new();
     let mut saved = false;
+    let mut serial = SerialBridge::default();
     loop {
         if abort.load(Ordering::Relaxed) {
             break;
@@ -454,6 +534,11 @@ fn run(
                     saved = true;
                     break;
                 }
+                Command::SerialBreak => {
+                    if serial.pty.is_some() {
+                        serial.break_pending = true;
+                    }
+                }
                 Command::Pause => {
                     state.phase = match state.phase {
                         Phase::Running => Phase::Paused,
@@ -474,8 +559,46 @@ fn run(
                         }
                         load_nvram(&target_path, settings.model)
                     })();
-                    match nvram.and_then(|n| build(&settings, n)) {
-                        Ok(new) => {
+                    let replacement = nvram.and_then(|n| build(&settings, n)).and_then(|new| {
+                        // Reserve a different endpoint before replacing the running machine.
+                        let reuse = settings.headless
+                            && serial
+                                .pty
+                                .as_ref()
+                                .is_some_and(|p| p.alias_matches(&settings.serial_pty_link));
+                        let pty = if settings.headless && !reuse {
+                            Some(SerialPty::open(&settings.serial_pty_link)?)
+                        } else {
+                            None
+                        };
+                        Ok((new, pty, reuse))
+                    });
+                    match replacement {
+                        Ok((new, pty, reuse)) => {
+                            if !reuse {
+                                serial.pty = pty;
+                            }
+                            if let Some(p) = &mut serial.pty {
+                                p.reset();
+                            }
+                            serial.epoch =
+                                new.bus.devices().unwrap().serial.receiver_epoch(Channel::A);
+                            serial.break_pending = false;
+                            serial.break_active = false;
+                            state.headless = settings.headless;
+                            state.serial_error = None;
+                            state.serial_dropped = 0;
+                            state.serial_endpoint = serial
+                                .pty
+                                .as_ref()
+                                .map(|p| p.endpoint().display().to_string());
+                            if let Some(p) = &serial.pty {
+                                eprintln!(
+                                    "TTYA serial console: {} -> {} (9600 8N1)",
+                                    p.endpoint().display(),
+                                    p.path().display()
+                                );
+                            }
                             machine = Some(new);
                             nvram_path = target_path;
                             network = settings
@@ -512,6 +635,12 @@ fn run(
             if let Some(m) = &machine {
                 publish(m, &mut state, &shared, &mut frame_cache);
             } else {
+                *shared.lock().unwrap() = state.clone();
+            }
+        }
+        if let Some(m) = machine.as_mut() {
+            serial.service(m, state.phase == Phase::Running, &mut state);
+            if state.phase != Phase::Running {
                 *shared.lock().unwrap() = state.clone();
             }
         }
@@ -573,6 +702,9 @@ fn run(
             }
         }
         let bytes = m.bus.devices_mut().unwrap().serial.take_output(Channel::A);
+        if let Some(p) = &mut serial.pty {
+            p.send(&bytes);
+        }
         for byte in bytes {
             match byte {
                 b'\n' => state.serial.push('\n'),
@@ -601,6 +733,8 @@ fn run(
         }
         publish(&m, &mut state, &shared, &mut frame_cache);
     }
+    drop(serial); // Remove only our alias before publishing final shutdown.
+    state.serial_endpoint = None;
     state.phase = Phase::Stopped;
     *shared.lock().unwrap() = state;
 }
@@ -738,6 +872,90 @@ mod tests {
         let ss5 = Model::Sparcstation5.default_nvram().image();
         let axil = Model::Axil320.default_nvram().image();
         assert_ne!(&ss5[0x1fd8..0x1fe8], &axil[0x1fd8..0x1fe8]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn serial_break_holds_across_batches_retries_full_fifo_and_flushes_receiver_epoch() {
+        let mut machine = Machine::ss5(8 * 1024 * 1024, &[0; 4]).unwrap();
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        serial.write(4, 4).unwrap();
+        serial.write(4, 0x44).unwrap();
+        serial.write(4, 3).unwrap();
+        serial.write(4, 0xc1).unwrap();
+        for b in [1, 2, 3] {
+            assert!(serial.receive(Channel::A, b));
+        }
+        let mut bridge = SerialBridge {
+            pty: Some(SerialPty::open("").unwrap()),
+            epoch: serial.receiver_epoch(Channel::A),
+            break_pending: true,
+            ..SerialBridge::default()
+        };
+        let mut state = Snapshot::default();
+        bridge.service(&mut machine, false, &mut state);
+        assert!(!bridge.break_active); // Paused commands do not mutate the SCC.
+        bridge.service(&mut machine, true, &mut state);
+        assert!(bridge.break_active);
+        state.steps = 999_999;
+        bridge.service(&mut machine, true, &mut state);
+        assert_ne!(
+            machine.bus.devices_mut().unwrap().serial.read(4).unwrap() & 0x80,
+            0
+        );
+        state.steps = 1_000_000;
+        bridge.service(&mut machine, true, &mut state);
+        assert!(bridge.break_active); // NUL termination cannot overrun the full FIFO.
+        assert!(state.serial_error.is_none());
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+            1
+        );
+        bridge.service(&mut machine, true, &mut state);
+        assert!(!bridge.break_active);
+        for expected in [2, 3, 0] {
+            assert_eq!(
+                machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+                expected
+            );
+        }
+        bridge.pty.as_mut().unwrap().input.extend(b"old input");
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        serial.write(4, 3).unwrap();
+        serial.write(4, 0xc1).unwrap();
+        bridge.service(&mut machine, false, &mut state);
+        assert!(bridge.pty.as_ref().unwrap().input.is_empty());
+    }
+    #[test]
+    fn headless_profiles_allocate_no_framebuffer_or_vsimm_and_keep_keyboard_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        fs::write(&prom, [0; 4]).unwrap();
+        for (model, ram) in [
+            (Model::Sparcstation5, 256),
+            (Model::Sparcstation20, 512),
+            (Model::Axil320, 512),
+        ] {
+            let settings = Settings {
+                model,
+                headless: true,
+                ram_mib: ram,
+                display: if model == Model::Sparcstation20 {
+                    Display::Sx
+                } else {
+                    Display::Cgsix
+                },
+                prom: prom.display().to_string(),
+                cgsix_rom: "does-not-exist".into(),
+                ..Settings::default()
+            };
+            let m = build(&settings, model.default_nvram()).unwrap();
+            assert!(m.bus.sx().is_none() && m.bus.cgsix().is_none());
+            assert!(m.bus.devices().unwrap().keyboard.is_some());
+            assert_eq!(
+                m.bus.dram().unwrap().bank_sizes().iter().sum::<usize>(),
+                ram as usize * 1024 * 1024
+            );
+        }
     }
     #[test]
     fn machine_models_choose_the_expected_firmware_and_graphics() {

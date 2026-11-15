@@ -58,7 +58,7 @@ SCC channel B; focus loss and capture release send button releases.
 delegates RAM validation and choices to the Helios profile API; RAM is part of
 cold-replacement detection but not machine identity or NVRAM paths. SS-20
 exposes a display choice: native SX/CG14 (no TurboGX ROM) or a TurboGX SBus
-card. SS-5 and Axil 320 require TurboGX. CGsix construction selects the
+card. Graphical SS-5 and Axil 320 require TurboGX. CGsix construction selects the
 no-VSIMM core path directly rather than removing SX after allocation.
 Configured image sizes/readability and read/write disk access are
 validated on save. Empty firmware paths are valid for an unconfigured desktop;
@@ -108,3 +108,21 @@ socket populations and exercise the actual F5 worker replacement: a guest
 write/read at 192 MiB distinguishes 128 MiB from 256 MiB installation. Cancel,
 Discard, failed Save and failed construction preserve the previous machine,
 catalog and NVRAM identity.
+
+## Serial PTY ownership
+
+`serial_pty.rs` owns a nonblocking Unix PTY and an optional locked, owned symlink
+on the machine worker. It preserves raw SCC A bytes; printable diagnostics are
+derived separately. Input is bounded and retained on SCC FIFO backpressure;
+receiver epochs and cold resets discard stale input. Paused workers service
+host transport at the existing bounded command wait without stepping the guest.
+No terminal process owns emulation, and slow readers cannot block the worker.
+
+Headless construction selects `InstalledVideo::None` before allocating RAM,
+skips CGsix loading, and retains keyboard presence for supported OBP startup.
+`obp_console.rs` adjusts only the two console variables in initialized NVRAM
+for pinned original PROMs. See [firmware details and limits](serial-console.md).
+The control panel displays the running endpoint, not an unsaved draft. Mode
+and alias changes use the existing confirmed cold-replacement transaction;
+failed replacement retains the old machine and PTY. `terminal.rs` runs only
+on an explicit Advanced action and uses argument vectors, never a shell.

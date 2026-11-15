@@ -11,6 +11,8 @@ pub struct NamedMachine {
     pub legacy_state: bool,
     pub model: Model,
     pub display: Display,
+    pub headless: bool,
+    pub serial_pty_link: String,
     pub cpus: u8,
     pub ram_mib: u32,
     pub prom: String,
@@ -32,6 +34,8 @@ impl NamedMachine {
             legacy_state,
             model: settings.model,
             display: settings.display,
+            headless: settings.headless,
+            serial_pty_link: settings.serial_pty_link.clone(),
             cpus: settings.cpus,
             ram_mib: settings.ram_mib,
             prom: settings.prom.clone(),
@@ -45,6 +49,8 @@ impl NamedMachine {
     fn apply(&self, settings: &mut Settings) {
         settings.model = self.model;
         settings.display = self.display;
+        settings.headless = self.headless;
+        settings.serial_pty_link = self.serial_pty_link.clone();
         settings.cpus = self.cpus;
         settings.ram_mib = self.ram_mib;
         settings.prom = self.prom.clone();
@@ -160,7 +166,11 @@ impl Settings {
                 "s (experimental)"
             },
             self.ram_mib,
-            self.model.graphics_short(self.display),
+            if self.headless {
+                "Headless / TTYA"
+            } else {
+                self.model.graphics_short(self.display)
+            },
             if self.network { "on" } else { "off" }
         )
     }
