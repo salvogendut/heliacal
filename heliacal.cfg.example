@@ -7,6 +7,9 @@ display = "cgsix"
 # F9 > General > Tinker exposes these under Advanced. Headless keeps the control window.
 # Requires initialized original-OBP NVRAM; see docs/serial-console.md.
 headless = false
+# Advanced: false = faster boots (100 ns); true = nominal 85/75 MHz rates.
+# Saved per named machine; applies at next boot / confirmed F5.
+accurate_cpu_clocks = false
 # Empty: allocated /dev/pts/N only. Optional stable alias, relative to this config.
 serial_pty_link = ""
 # Exact valid DSIMM total for this model/display; 128 is the default.

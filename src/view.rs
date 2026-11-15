@@ -702,7 +702,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    396,
+                    428,
                     &if let Some(pc2) = state.secondary_pc {
                         format!(
                             "CPU0 {:08x} / CPU2 {:08x} / {} + {} steps",
@@ -716,7 +716,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    420,
+                    452,
                     "Serial A output (recent printable text):",
                     MUTED,
                 )?;
@@ -725,7 +725,7 @@ fn draw_overlay(
                     text(
                         c,
                         144,
-                        444 + i as i32 * 18,
+                        476 + i as i32 * 18,
                         &line.chars().take(82).collect::<String>(),
                         TEXT,
                     )?;
@@ -734,7 +734,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    396,
+                    428,
                     "Diagnostics are hidden. Enable Tinker in General.",
                     MUTED,
                 )?;
@@ -826,6 +826,8 @@ fn draw_overlay(
             "Enter cycles valid memory sizes for this model and display."
         } else if o.field() == Field::SerialConsole {
             "Show/hide in-window serial output. Save applies immediately; PTY stays available."
+        } else if o.field() == Field::AccurateClocks {
+            "Off: faster boots. On: nominal MHz, slower timer waits. Save, then F5."
         } else if o.tab == Tab::Advanced {
             "Enter changes settings / edits path / runs action. Save + F5 applies hardware."
         } else if o.tab == Tab::Network {

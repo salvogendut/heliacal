@@ -99,7 +99,9 @@ You can also select the machine and supply paths for this session:
   --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
 
-Graphical SS-5 and Axil 320 require a TurboGX ROM. SS-20 with `--display sx` and headless guests do not.
+Graphical SS-5 and Axil 320 require the **1 MiB TurboGX** ROM (`turbogx.bin`).
+The 4 MiB TurboGX+ ROM, including `sun-tgx+-vesa.bin`, is incompatible with
+the emulated card and known images are rejected at setup. SS-20 with `--display sx` and headless guests do not.
 
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
@@ -334,3 +336,17 @@ real-core lifecycle behavior with synthetic firmware, settings failure paths,
 all seven SCSI IDs, disk/CD selection, input backpressure, shared modifier
 keys, and failed NVRAM save/retry.
 See [architecture](docs/architecture.md) for the frontend/core boundary.
+
+## CPU clock policy
+
+For faster boots, **F9 > Advanced > Accurate CPU clocks** defaults to **Off**.
+Enable **General > Tinker** to expose it. Off uses the legacy 100 ns timebase;
+firmware may report roughly 9–10 MHz. On uses nominal 85 MHz for SS-5 and
+75 MHz for SS-20/Axil (Axil OBP rounds down to 74), which requires more
+interpreted instructions during guest timer waits. It does not model full
+pipeline/cache timing or improve host throughput.
+
+The choice is stored per named machine as `accurate_cpu_clocks = false`.
+Save applies it to the next boot; an existing guest requires confirmed **F5**
+replacement so firmware and Solaris recalibrate. Discard/Cancel leave the
+running clock unchanged. Labels, NVRAM identity and disk paths are retained.

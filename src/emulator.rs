@@ -298,6 +298,9 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         settings.installed_video(),
     )
     .map_err(|e| e.to_string())?;
+    if settings.accurate_cpu_clocks {
+        machine.reset_with_clock_mode(helios::machine::CpuClockMode::Hardware);
+    }
     if let Some(graphics) = graphics {
         machine.install_cgsix(graphics).map_err(|e| e.to_string())?;
     }
@@ -967,6 +970,45 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn worker_build_applies_both_clock_modes_to_each_profile() {
+        use crate::settings::Model;
+        use helios::machine::CpuClockMode;
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
+        for model in Model::ALL {
+            for accurate_cpu_clocks in [false, true] {
+                let settings = Settings {
+                    model,
+                    headless: true,
+                    ram_mib: 16,
+                    cpus: if model == Model::Sparcstation5 { 1 } else { 2 },
+                    prom: prom.display().to_string(),
+                    accurate_cpu_clocks,
+                    ..Settings::default()
+                };
+                let machine = build(&settings, model.default_nvram()).unwrap();
+                assert_eq!(
+                    machine.clock_mode(),
+                    if accurate_cpu_clocks {
+                        CpuClockMode::Hardware
+                    } else {
+                        CpuClockMode::Fast
+                    }
+                );
+                assert_eq!(
+                    machine.cpu_clock_hz(),
+                    if accurate_cpu_clocks {
+                        model.profile().cpu_clock_hz()
+                    } else {
+                        10_000_000
+                    }
+                );
+            }
+        }
+    }
+
     #[test]
     fn machine_models_choose_the_expected_firmware_and_graphics() {
         use crate::settings::Model;

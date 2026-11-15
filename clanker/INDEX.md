@@ -1,5 +1,7 @@
 # Agent notes
 
+- [Clock, serial boot and CDE follow-up](clock-serial-cde-followup.md) — compatible TurboGX ROM validation, selected CPU clocks, recovered Axil disk and rebuilt-core acceptance.
+
 - [serial-console-view.md](serial-console-view.md) — greyed headless Display row, live Advanced serial-view toggle, bounded ANSI terminal output, PTY fan-out and UI/Solaris validation.
 
 - [headless-pty-completion.md](headless-pty-completion.md) — implemented headless/TTYA PTY controls, original-OBP console selection, minicom/Solaris acceptance, lifecycle and cleanup.

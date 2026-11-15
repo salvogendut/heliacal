@@ -14,6 +14,7 @@ pub struct NamedMachine {
     pub headless: bool,
     pub serial_pty_link: String,
     pub cpus: u8,
+    pub accurate_cpu_clocks: bool,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -37,6 +38,7 @@ impl NamedMachine {
             headless: settings.headless,
             serial_pty_link: settings.serial_pty_link.clone(),
             cpus: settings.cpus,
+            accurate_cpu_clocks: settings.accurate_cpu_clocks,
             ram_mib: settings.ram_mib,
             prom: settings.prom.clone(),
             cgsix_rom: settings.cgsix_rom.clone(),
@@ -52,6 +54,7 @@ impl NamedMachine {
         settings.headless = self.headless;
         settings.serial_pty_link = self.serial_pty_link.clone();
         settings.cpus = self.cpus;
+        settings.accurate_cpu_clocks = self.accurate_cpu_clocks;
         settings.ram_mib = self.ram_mib;
         settings.prom = self.prom.clone();
         settings.cgsix_rom = self.cgsix_rom.clone();

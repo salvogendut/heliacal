@@ -147,3 +147,11 @@ Headless without changing the remembered graphical display choice.
 Parser reference: [vt100 0.18.1](https://docs.rs/crate/vt100/0.18.1), pinned in
 Cargo.lock. The no-std feature selection here bounds parser buffers; the
 frontend itself remains a normal std application.
+
+`accurate_cpu_clocks` is a per-machine hardware preference, default false.
+False selects the core's default Fast 100 ns timebase. True constructs a fresh
+machine then calls `reset_with_clock_mode(CpuClockMode::Hardware)` before
+attaching keyboard, storage or host endpoints. This selects nominal 85/75 MHz
+for both processors, while the core remains the sole owner of elapsed time.
+Clock changes participate in hardware_eq and the existing confirmed cold
+replacement; there is no live timebase switch or NVRAM identity change.
