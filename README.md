@@ -16,8 +16,11 @@ not need a TurboGX ROM. RAM sizes are not selectable.
 
 **F9 > General > CPUs** selects one or two CPUs on SS-20/Axil; SS-5 is
 fixed at one. Two CPUs use two identical single-CPU MBus modules and are
-**experimental**: original OBP identifies both and responds at `ok`, but
-Solaris SMP boot and desktop operation are not yet accepted. Save with F9,
+**experimental**: original OBP identifies both, and Solaris 2.6 SMP boots with
+both CPUs online. Recorded Linux/X11 checkpoints include SS-20 native-SX
+terminal input, capture and dragging, plus Axil/CGsix CDE window operations,
+focus-loss key release, disk activity and clean reset/reboot persistence.
+These are bounded workloads, not exhaustive SMP compatibility. Save with F9,
 then use F5 to confirm a cold reset of an existing guest. CPU count is also
 saved with each named machine (`cpus = 2`) and can be overridden for a session
 with `--cpus 2`. Old configurations default to one CPU.

@@ -1,8 +1,9 @@
 # Experimental multi-CPU selection
 
 2026-11-14. Branch `feat/cpu-selection`, from `95b6e10`. Built and tested with
-sibling Helios core `4e6ab81` (merged slice 3); Helios's new
-`feat/sun4m-smp-startup` branch currently adds documentation/evidence only.
+sibling Helios core `4e6ab81` (merged slice 3) for the original frontend
+implementation. The subsequent slice-4 CLI and desktop acceptance is recorded
+in the follow-up below; the library scheduler/device implementation is unchanged.
 
 ## Behavior
 
@@ -70,3 +71,26 @@ ROM/NVRAM/disk was changed, and no writable disk was attached during this work.
 The release binary was rebuilt against the core above. Existing installed
 Solaris UP checkpoints remain historical; they were not rerun in this frontend
 slice. Two-CPU guest work, storage persistence and desktop input are still open.
+
+
+## 2026-11-15 acceptance follow-up
+
+Helios slice 4 on `feat/sun4m-smp-startup` at `249d785` plus reviewed CLI
+changes now boots Solaris 2.6 with both processors online on SS-20 and Axil.
+The frontend remains `5c97099`; no frontend code change was needed for the
+new desktop validation. The earlier open milestones above are historical.
+
+SS-20/native-SX accepts graphical-console login, Xterm input, capture/release,
+pause/resume, window dragging and clean halt. Axil/CGsix CDE accepts terminal
+input, capture, CPU-bound work during filesystem I/O, clean halt, confirmed
+F5 reset/reboot, checksum reread and host Quit. Independent Axil follow-up
+also passes move, maximize/restore, expose, iconify/restore and held-Shift
+focus-loss release, with guest geometry and exact pixel assertions.
+
+The corrected core CLI/test tree has 605/607 passing tests and unchanged
+validated source hashes. Keep two CPUs experimental: four CPUs, arbitrary
+SMP operating systems and dedicated malloc/mmap stress remain unverified.
+The user approved incremental integration of both reviewed branches on
+2026-11-15; issue-state changes are separate from this acceptance record. See the [Helios review](../../helios/clanker/smp-slice4-review.md)
+for exact scopes and evidence. Both private review disks and duplicate captures
+were removed after clean shutdown; compact captures, assertions and logs remain.
