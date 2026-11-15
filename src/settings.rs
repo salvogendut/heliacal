@@ -112,8 +112,8 @@ impl Model {
     pub fn processor(self) -> &'static str {
         match self {
             Self::Sparcstation5 => "microSPARC-II / 85 MHz",
-            Self::Sparcstation20 => "SuperSPARC-II",
-            Self::Axil320 => "SuperSPARC 390Z55",
+            Self::Sparcstation20 => "SuperSPARC-II / 75 MHz",
+            Self::Axil320 => "SuperSPARC-II / 75 MHz",
         }
     }
 
@@ -175,6 +175,7 @@ pub struct Settings {
     pub headless: bool,
     pub serial_pty_link: String,
     pub cpus: u8,
+    pub accurate_cpu_clocks: bool,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -198,6 +199,7 @@ impl Default for Settings {
             headless: false,
             serial_pty_link: String::new(),
             cpus: 1,
+            accurate_cpu_clocks: false,
             ram_mib: RAM_MIB,
             prom: String::new(),
             cgsix_rom: String::new(),
@@ -369,6 +371,14 @@ impl Settings {
             }
             fs::File::open(path).map_err(|e| format!("{label}: {path}: {e}"))?;
         }
+        if !resolved.headless
+            && resolved.display == Display::Cgsix
+            && !resolved.cgsix_rom.is_empty()
+        {
+            let rom = fs::read(&resolved.cgsix_rom).map_err(|e| format!("TurboGX ROM: {e}"))?;
+            helios::devices::cgsix::Cgsix::validate_rom(&rom)
+                .map_err(|e| format!("TurboGX ROM: {e:?}"))?;
+        }
         if !self.disk_read_only {
             for (id, target) in resolved.scsi.iter().enumerate() {
                 if target.kind == TargetKind::Disk && !target.path.is_empty() {
@@ -388,6 +398,7 @@ impl Settings {
             && self.nvram_path(Path::new("nvram")) == other.nvram_path(Path::new("nvram"))
             && self.model == other.model
             && self.cpus == other.cpus
+            && self.accurate_cpu_clocks == other.accurate_cpu_clocks
             && self.display == other.display
             && self.headless == other.headless
             && self.serial_pty_link == other.serial_pty_link
@@ -525,6 +536,52 @@ pub fn default_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_mode_defaults_fast_and_roundtrips_per_named_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.cfg");
+        let mut settings: Settings = toml::from_str("model = 'sparcstation20'").unwrap();
+        assert!(!settings.accurate_cpu_clocks);
+        settings.save_as_machine("Fast").unwrap();
+        settings.save_as_machine("Accurate").unwrap();
+        let nvram = settings.nvram_path(&path);
+        settings.accurate_cpu_clocks = true;
+        settings.save(&path).unwrap();
+        let mut loaded = Settings::load(&path).unwrap();
+        assert!(loaded.accurate_cpu_clocks);
+        assert_eq!(loaded.nvram_path(&path), nvram);
+        loaded.select_machine("Fast").unwrap();
+        assert!(!loaded.accurate_cpu_clocks);
+        loaded.select_machine("Accurate").unwrap();
+        assert!(loaded.accurate_cpu_clocks);
+        let old: crate::profiles::NamedMachine = toml::from_str("model = 'axil320'").unwrap();
+        assert!(!old.accurate_cpu_clocks);
+    }
+
+    #[test]
+    fn incompatible_turbogx_plus_rom_is_rejected_transactionally() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("machine.cfg");
+        let rom = dir.path().join("renamed.rom");
+        let mut settings = Settings {
+            cgsix_rom: rom.display().to_string(),
+            ..Settings::default()
+        };
+        fs::write(&rom, vec![0; 32768]).unwrap();
+        settings.save(&config).unwrap();
+        let original = fs::read(&config).unwrap();
+        // Synthetic CRC-32 fc7be95e fixture; contains no firmware.
+        let mut incompatible = vec![0; 32768];
+        incompatible[32764..].copy_from_slice(&[0x2c, 0x1d, 0x32, 0x02]);
+        fs::write(&rom, incompatible).unwrap();
+        let error = settings.save(&config).unwrap_err();
+        assert!(error.contains("TurboGX+"), "{error}");
+        assert!(error.contains("turbogx.bin"), "{error}");
+        assert_eq!(fs::read(&config).unwrap(), original);
+        settings.headless = true;
+        settings.save(&config).unwrap(); // No graphics card is constructed.
+    }
 
     #[test]
     fn cpu_counts_default_to_one_validate_and_require_cold_replacement() {

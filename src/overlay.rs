@@ -39,6 +39,7 @@ pub enum Field {
     OpenSerialTerminal,
     SerialBreak,
     SerialConsole,
+    AccurateClocks,
     Network,
     Smoothing,
     Scanlines,
@@ -238,6 +239,18 @@ impl Overlay {
                             on_off(self.draft.show_serial_console),
                             Field::SerialConsole,
                         ),
+                        (
+                            "Accurate CPU clocks",
+                            if self.draft.accurate_cpu_clocks {
+                                format!(
+                                    "On / {} MHz",
+                                    self.draft.model.profile().cpu_clock_hz() / 1_000_000
+                                )
+                            } else {
+                                "Off / faster boots".into()
+                            },
+                            Field::AccurateClocks,
+                        ),
                     ]);
                 }
                 rows
@@ -338,6 +351,7 @@ impl Overlay {
                 self.adjust_ram_after_hardware_change();
             }
             Field::SerialConsole => self.draft.show_serial_console ^= true,
+            Field::AccurateClocks => self.draft.accurate_cpu_clocks ^= true,
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
@@ -669,6 +683,30 @@ mod tests {
         assert!(!o.draft.network);
         assert!(o.dirty(&settings));
         assert!(!settings.hardware_eq(&o.draft));
+    }
+
+    #[test]
+    fn accurate_clocks_are_tinker_gated_and_only_change_the_hardware_draft() {
+        let mut settings = Settings::default();
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Advanced;
+        assert!(!o.rows().iter().any(|r| r.field == Field::AccurateClocks));
+        settings.tinker = true;
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Advanced;
+        o.selected = o
+            .rows()
+            .iter()
+            .position(|r| r.field == Field::AccurateClocks)
+            .unwrap();
+        assert!(!o.draft.accurate_cpu_clocks);
+        o.activate();
+        assert!(o.draft.accurate_cpu_clocks);
+        assert!(!settings.accurate_cpu_clocks);
+        assert!(o.dirty(&settings));
+        assert!(!o.draft.hardware_eq(&settings));
+        o.activate();
+        assert!(!o.dirty(&settings));
     }
 
     #[test]

@@ -130,3 +130,22 @@ machine graphically first. This is not a full-POST implementation or a repair
 for corrupt firmware state. An unrecognized PROM is left untouched and reports
 that automatic console selection is unavailable on stderr; configure its own
 serial console before using it headlessly. OpenBIOS compatibility is not claimed.
+
+## Solaris disk paths and clock reporting
+
+An installed SS-5 disk cannot be moved directly to SS-20/Axil: its `/dev/dsk`
+links and `/etc/path_to_inst` refer to the SS-5 SBus map. A boot failure naming
+`/usr`, missing `/usr/sbin/fsck`, or `no such device` can result from those
+stale paths. It is independent of serial versus graphical console selection
+and of the supported 512 MiB RAM size. Use a disk installed for the selected
+model, or migrate a copy using the [Helios SCSI migration procedure](../../helios/docs/scsi.md).
+Preserve the original disk; selecting another model does not rewrite guest paths.
+
+With **Advanced > Accurate CPU clocks** on, named profiles use 85 MHz for
+SS-5 and 75 MHz for SS-20/Axil. Off is the default fast 100 ns timebase,
+which firmware measures as roughly 9–10 MHz. Save and confirmed F5 apply
+the per-machine choice. The core
+retains fractional cycles and shares device time across CPUs. SS-5 OBP reports
+85.0 MHz and SS-20 reports 75 MHz; Axil OBP 2.19 truncates its calibration to
+74 MHz on this 75 MHz timebase. These are functional clocks, without a full
+pipeline or cache timing model.
