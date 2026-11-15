@@ -9,7 +9,8 @@
 - Support Sun SPARCstation 5, SPARCstation 20 and Axil 320 with 128 MiB RAM by
   default and the exact valid RAM totals for the selected model/display.
   Map the selected model to a Helios `MachineProfile`. SS-20 offers native
-  SX/CG14 or a TurboGX SBus card; SS-5 and Axil 320 require TurboGX. Validate
+  SX/CG14 or a TurboGX SBus card; graphical SS-5 and Axil 320 require TurboGX.
+  Headless machines keep the control window and expose TTYA via a Unix PTY. Validate
   the model/display combination in construction and keep per-machine NVRAM
   separate.
 - Keep SDL window/render/event work on the main thread and machine work on

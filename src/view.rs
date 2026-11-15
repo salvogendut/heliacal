@@ -71,6 +71,185 @@ pub struct Presentation<'a> {
     pub quitting: bool,
 }
 
+const CONSOLE_BG: Color = Color::RGB(8, 12, 18);
+const CONSOLE_FG: Color = Color::RGB(215, 224, 232);
+
+fn terminal_color(color: vt100::Color, default: Color, bright: bool) -> Color {
+    match color {
+        vt100::Color::Default => {
+            if bright {
+                Color::RGB(255, 255, 255)
+            } else {
+                default
+            }
+        }
+        vt100::Color::Rgb(r, g, b) => Color::RGB(r, g, b),
+        vt100::Color::Idx(mut index) => {
+            if bright && index < 8 {
+                index += 8;
+            }
+            const ANSI: [(u8, u8, u8); 16] = [
+                (0, 0, 0),
+                (170, 0, 0),
+                (0, 170, 0),
+                (170, 85, 0),
+                (0, 0, 170),
+                (170, 0, 170),
+                (0, 170, 170),
+                (170, 170, 170),
+                (85, 85, 85),
+                (255, 85, 85),
+                (85, 255, 85),
+                (255, 255, 85),
+                (85, 85, 255),
+                (255, 85, 255),
+                (85, 255, 255),
+                (255, 255, 255),
+            ];
+            if index < 16 {
+                let (r, g, b) = ANSI[index as usize];
+                Color::RGB(r, g, b)
+            } else if index < 232 {
+                let cube = index - 16;
+                let level = |n| if n == 0 { 0 } else { 55 + n * 40 };
+                Color::RGB(level(cube / 36), level((cube / 6) % 6), level(cube % 6))
+            } else {
+                let gray = 8 + (index - 232) * 10;
+                Color::RGB(gray, gray, gray)
+            }
+        }
+    }
+}
+
+fn cell_style(cell: &vt100::Cell) -> (Color, Color, bool) {
+    let mut fg = terminal_color(cell.fgcolor(), CONSOLE_FG, cell.bold());
+    let mut bg = terminal_color(cell.bgcolor(), CONSOLE_BG, false);
+    if cell.dim() {
+        fg = Color::RGB(fg.r / 2, fg.g / 2, fg.b / 2);
+    }
+    if cell.inverse() {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    (fg, bg, cell.underline())
+}
+
+fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl3::Error> {
+    text(c, 80, 56, "SERIAL CONSOLE / TTYA", ACCENT)?;
+    text(
+        c,
+        80,
+        80,
+        state.machine_name.as_deref().unwrap_or("Helios"),
+        TEXT,
+    )?;
+    fill(c, Rect::new(64, 112, 832, 460), CONSOLE_BG)?;
+    c.set_draw_color(BORDER);
+    c.draw_rect(Rect::new(64, 112, 832, 460))?;
+    // 80x24 at 10x18 pixels. Group equal attributes to avoid one SDL text
+    // operation per character. The UI uses its existing ASCII glyph font.
+    let screen = &state.serial_screen;
+    for row in 0..24 {
+        let mut col = 0;
+        while col < 80 {
+            let start = col;
+            let style = cell_style(screen.cell(row, col).unwrap());
+            let mut run = String::new();
+            while col < 80 {
+                let cell = screen.cell(row, col).unwrap();
+                if cell_style(cell) != style {
+                    break;
+                }
+                run.push(if !cell.has_contents() || cell.is_wide_continuation() {
+                    ' '
+                } else {
+                    cell.contents()
+                        .chars()
+                        .next()
+                        .filter(|ch| ch.is_ascii() && !ch.is_ascii_control())
+                        .unwrap_or('?')
+                });
+                col += 1;
+            }
+            let x = 80 + i32::from(start) * 10;
+            let y = 128 + i32::from(row) * 18;
+            let width = u32::from(col - start) * 10;
+            if style.1 != CONSOLE_BG {
+                fill(c, Rect::new(x, y, width, 18), style.1)?;
+            }
+            let scale = c.scale();
+            c.set_scale(scale.0 * 1.25, scale.1 * 1.25)?;
+            c.set_draw_color(style.0);
+            let drawn = c.draw_debug_text(&run, (x as f32 / 1.25, (y + 3) as f32 / 1.25));
+            let restored = c.set_scale(scale.0, scale.1);
+            drawn.and(restored)?;
+            if style.2 {
+                fill(c, Rect::new(x, y + 15, width, 1), style.0)?;
+            }
+        }
+    }
+    if !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        fill(
+            c,
+            Rect::new(
+                80 + i32::from(col.min(79)) * 10,
+                128 + i32::from(row.min(23)) * 18 + 16,
+                10,
+                2,
+            ),
+            CONSOLE_FG,
+        )?;
+    }
+    text(
+        c,
+        80,
+        594,
+        "Output view / connect via minicom to type:",
+        MUTED,
+    )?;
+    if let Some(endpoint) = &state.serial_endpoint {
+        let chars: Vec<_> = crate::terminal::recipe(endpoint).chars().collect();
+        for (i, line) in chars.chunks(100).take(3).enumerate() {
+            text(
+                c,
+                80,
+                618 + i as i32 * 18,
+                &line.iter().collect::<String>(),
+                TEXT,
+            )?;
+        }
+    }
+    if let Some(error) = &state.serial_error {
+        text(
+            c,
+            80,
+            686,
+            &error.chars().take(100).collect::<String>(),
+            ACCENT,
+        )?;
+    } else if state.serial_dropped != 0 {
+        text(
+            c,
+            80,
+            686,
+            &format!(
+                "Slow/disconnected PTY: {} old output bytes discarded",
+                state.serial_dropped
+            ),
+            ACCENT,
+        )?;
+    } else {
+        text(
+            c,
+            80,
+            686,
+            "F9 > Advanced > Serial console view toggles this screen",
+            MUTED,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn draw(
     c: &mut WindowCanvas,
     guest: &Texture,
@@ -81,7 +260,78 @@ pub fn draw(
     c.clear();
     c.set_blend_mode(BlendMode::Blend);
     let destination = guest_rect(p.settings.show_status);
-    if p.state.has_machine {
+    if p.state.has_machine && p.state.headless && p.settings.show_serial_console {
+        draw_serial_console(c, p.state)?;
+    } else if p.state.has_machine && p.state.headless {
+        text(c, 144, 200, "HEADLESS WORKSTATION / SERIAL TTYA", ACCENT)?;
+        text(
+            c,
+            144,
+            240,
+            p.state.machine_description.as_deref().unwrap_or("Helios"),
+            TEXT,
+        )?;
+        text(
+            c,
+            144,
+            280,
+            "Connect from a terminal (9600 8N1, flow control off):",
+            MUTED,
+        )?;
+        if let Some(endpoint) = &p.state.serial_endpoint {
+            let recipe = crate::terminal::recipe(endpoint);
+            for (i, line) in recipe.as_bytes().chunks(82).enumerate() {
+                text(
+                    c,
+                    144,
+                    310 + i as i32 * 20,
+                    &String::from_utf8_lossy(line),
+                    TEXT,
+                )?;
+            }
+        }
+        text(
+            c,
+            144,
+            400,
+            "F9 > Advanced: Open serial terminal / Send serial BREAK",
+            MUTED,
+        )?;
+        text(
+            c,
+            144,
+            430,
+            "Enable Tinker in General to show these controls.",
+            MUTED,
+        )?;
+        text(
+            c,
+            144,
+            480,
+            "Ctrl+P Pause/resume   F5 Cold reset   F12 Quit",
+            TEXT,
+        )?;
+        if let Some(error) = &p.state.serial_error {
+            text(
+                c,
+                144,
+                530,
+                &error.chars().take(82).collect::<String>(),
+                ACCENT,
+            )?;
+        } else if p.state.serial_dropped != 0 {
+            text(
+                c,
+                144,
+                530,
+                &format!(
+                    "Slow/disconnected terminal: {} old output bytes discarded",
+                    p.state.serial_dropped
+                ),
+                ACCENT,
+            )?;
+        }
+    } else if p.state.has_machine {
         c.copy(guest, None, destination)?;
         if p.settings.scanlines {
             for y in (destination.y()..destination.bottom()).step_by(3) {
@@ -116,7 +366,11 @@ pub fn draw(
             &format!(
                 "{} MiB RAM  /  {}",
                 p.settings.ram_mib,
-                machine.graphics(p.settings.display)
+                if p.settings.headless {
+                    "Headless / serial TTYA"
+                } else {
+                    machine.graphics(p.settings.display)
+                }
             ),
             MUTED,
         )?;
@@ -127,7 +381,7 @@ pub fn draw(
             &format!(
                 "F9  Select {}{}",
                 machine.prom_label(),
-                if p.settings.display == crate::settings::Display::Sx {
+                if p.settings.headless || p.settings.display == crate::settings::Display::Sx {
                     ""
                 } else {
                     " and TurboGX ROM"
@@ -448,7 +702,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    300,
+                    396,
                     &if let Some(pc2) = state.secondary_pc {
                         format!(
                             "CPU0 {:08x} / CPU2 {:08x} / {} + {} steps",
@@ -462,16 +716,16 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    324,
+                    420,
                     "Serial A output (recent printable text):",
                     MUTED,
                 )?;
-                let lines: Vec<_> = state.serial.lines().rev().take(11).collect();
+                let lines: Vec<_> = state.serial.lines().rev().take(5).collect();
                 for (i, line) in lines.iter().rev().enumerate() {
                     text(
                         c,
                         144,
-                        348 + i as i32 * 18,
+                        444 + i as i32 * 18,
                         &line.chars().take(82).collect::<String>(),
                         TEXT,
                     )?;
@@ -480,7 +734,7 @@ fn draw_overlay(
                 text(
                     c,
                     144,
-                    300,
+                    396,
                     "Diagnostics are hidden. Enable Tinker in General.",
                     MUTED,
                 )?;
@@ -570,8 +824,10 @@ fn draw_overlay(
             "Enter toggles 1/2 CPUs. Experimental SMP; applies on next cold reset."
         } else if o.field() == Field::Ram {
             "Enter cycles valid memory sizes for this model and display."
+        } else if o.field() == Field::SerialConsole {
+            "Show/hide in-window serial output. Save applies immediately; PTY stays available."
         } else if o.tab == Tab::Advanced {
-            "Arrows navigate / Enter toggles disk access"
+            "Enter changes settings / edits path / runs action. Save + F5 applies hardware."
         } else if o.tab == Tab::Network {
             "Arrows navigate / Enter toggles host networking"
         } else if o.tab == Tab::Media {

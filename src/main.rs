@@ -1,11 +1,17 @@
 mod activity;
 mod emulator;
+#[cfg(test)]
+mod headless_tests;
 mod input;
+mod obp_console;
 mod overlay;
 mod profiles;
 #[cfg(test)]
 mod ram_acceptance_tests;
+mod serial_pty;
+mod serial_screen;
 mod settings;
+mod terminal;
 mod view;
 
 use emulator::{Emulator, Phase};
@@ -71,6 +77,8 @@ struct Options {
     display: Option<Display>,
     cpus: Option<u8>,
     ram_mib: Option<u32>,
+    headless: Option<bool>,
+    serial_pty_link: Option<String>,
     prom: Option<String>,
     rom: Option<String>,
     disk: Option<String>,
@@ -97,6 +105,9 @@ impl Options {
         if let Some(display) = self.display {
             settings.display = display;
         }
+        if let Some(headless) = self.headless {
+            settings.headless = headless;
+        }
         settings.validate_hardware()?;
         Ok(())
     }
@@ -108,7 +119,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -157,6 +168,11 @@ impl Options {
                         "sx" => Display::Sx,
                         _ => return Err(format!("Unknown display {value}; use cgsix or sx").into()),
                     });
+                }
+                "--headless" => o.headless = Some(true),
+                "--graphical" => o.headless = Some(false),
+                "--serial-pty-link" => {
+                    o.serial_pty_link = Some(args.next().ok_or("--serial-pty-link needs a path")?)
                 }
                 "--prom" => o.prom = Some(args.next().ok_or("--prom needs a path")?),
                 "--cgsix-rom" => o.rom = Some(args.next().ok_or("--cgsix-rom needs a path")?),
@@ -250,6 +266,12 @@ impl App {
             Field::Prom => &PROM_FILTERS,
             Field::Rom => &ROM_FILTERS,
             Field::Scsi(_) => &MEDIA_FILTERS,
+            Field::SerialPtyLink => {
+                if let Some(o) = &mut self.overlay {
+                    o.activate();
+                }
+                return Ok(());
+            }
             _ => return Ok(()),
         };
         let location = self
@@ -287,7 +309,22 @@ impl App {
     fn activate(&mut self, window: &sdl3::video::Window) -> std::result::Result<(), String> {
         let notice = if let Some(o) = &mut self.overlay {
             let field = o.field();
-            if field.is_path() {
+            if field == Field::OpenSerialTerminal || field == Field::SerialBreak {
+                let state = self.emulator.snapshot();
+                let endpoint = state.serial_endpoint.as_deref().ok_or(
+                    "Boot a headless machine first; draft changes apply after Save and F5.",
+                )?;
+                if field == Field::OpenSerialTerminal {
+                    terminal::open(endpoint)?;
+                    Some(
+                        "Opening minicom. Use 9600 8N1 with hardware/software flow control off."
+                            .into(),
+                    )
+                } else {
+                    self.emulator.serial_break()?;
+                    Some("Serial BREAK queued for the running guest.".into())
+                }
+            } else if field.is_path() {
                 self.browse(field, window)?;
                 None
             } else {
@@ -327,6 +364,10 @@ impl App {
     }
     fn screenshot(&mut self) -> Result<()> {
         let state = self.emulator.snapshot();
+        if state.headless {
+            self.notify("This headless guest has no framebuffer to capture.");
+            return Ok(());
+        }
         if !state.has_machine {
             self.notify("Boot the workstation before capturing its display.");
             return Ok(());
@@ -435,7 +476,9 @@ impl App {
         } else if ctrl && key == Scancode::Return {
             if self.captured {
                 self.release();
-            } else if self.emulator.snapshot().phase == Phase::Running {
+            } else if self.emulator.snapshot().phase == Phase::Running
+                && !self.emulator.snapshot().headless
+            {
                 self.captured = true;
             }
         } else if ctrl && key == Scancode::P {
@@ -517,6 +560,7 @@ fn run(options: Options) -> Result<()> {
     for (dest, source) in [
         (&mut settings.prom, options.prom),
         (&mut settings.cgsix_rom, options.rom),
+        (&mut settings.serial_pty_link, options.serial_pty_link),
     ] {
         if let Some(path) = source {
             *dest = std::path::absolute(path)?.to_string_lossy().into_owned();
@@ -603,6 +647,8 @@ fn run(options: Options) -> Result<()> {
     let mut last_error: Option<String> = None;
     let mut last_notice: Option<String> = None;
     let mut last_captured = false;
+    let mut last_serial_status = (None, None, 0);
+    let mut last_serial_frame = 0;
     let mut last_shutdown_failed = false;
     let mut redraw = true;
     let mut grabbed: Option<bool> = None;
@@ -698,6 +744,7 @@ fn run(options: Options) -> Result<()> {
                         }
                     } else if view::guest_rect(app.settings.show_status).contains_point((x, y))
                         && app.emulator.snapshot().phase == Phase::Running
+                        && !app.emulator.snapshot().headless
                     {
                         app.captured = true;
                     }
@@ -755,6 +802,21 @@ fn run(options: Options) -> Result<()> {
         if canvas.window().title() != title {
             canvas.window_mut().set_title(&title)?;
         }
+        let serial_status = (
+            state.serial_endpoint.clone(),
+            state.serial_error.clone(),
+            state.serial_dropped,
+        );
+        if serial_status != last_serial_status {
+            redraw = true;
+            last_serial_status = serial_status;
+        }
+        if state.serial_frame != last_serial_frame {
+            if state.headless && app.settings.show_serial_console {
+                redraw = true;
+            }
+            last_serial_frame = state.serial_frame;
+        }
         if state.phase != last_phase
             || state.has_machine != last_has_machine
             || state.machine_name != last_machine_name
@@ -794,7 +856,7 @@ fn run(options: Options) -> Result<()> {
             app.quitting = false;
             app.notify("NVRAM could not be saved; machine retained. Fix the path/permissions and retry quit.");
         }
-        if state.phase != Phase::Running && app.captured {
+        if (state.phase != Phase::Running || state.headless) && app.captured {
             app.release();
         }
         if frame_id != state.frame {

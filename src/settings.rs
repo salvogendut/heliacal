@@ -172,6 +172,8 @@ pub struct Settings {
     pub machines: BTreeMap<String, crate::profiles::NamedMachine>,
     pub model: Model,
     pub display: Display,
+    pub headless: bool,
+    pub serial_pty_link: String,
     pub cpus: u8,
     pub ram_mib: u32,
     pub prom: String,
@@ -182,6 +184,7 @@ pub struct Settings {
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
+    pub show_serial_console: bool,
     pub tinker: bool,
 }
 
@@ -192,6 +195,8 @@ impl Default for Settings {
             machines: BTreeMap::new(),
             model: Model::Sparcstation5,
             display: Display::Cgsix,
+            headless: false,
+            serial_pty_link: String::new(),
             cpus: 1,
             ram_mib: RAM_MIB,
             prom: String::new(),
@@ -209,6 +214,7 @@ impl Default for Settings {
             smoothing: false,
             scanlines: false,
             show_status: true,
+            show_serial_console: true,
             tinker: false,
         }
     }
@@ -276,9 +282,17 @@ impl Settings {
         }
         self.model
             .profile()
-            .ram_layout(self.ram_bytes()?, self.display.installed_video())
+            .ram_layout(self.ram_bytes()?, self.installed_video())
             .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    pub fn installed_video(&self) -> InstalledVideo {
+        if self.headless {
+            InstalledVideo::None
+        } else {
+            self.display.installed_video()
+        }
     }
 
     pub fn ram_bytes(&self) -> Result<usize, String> {
@@ -293,7 +307,7 @@ impl Settings {
         let totals = self
             .model
             .profile()
-            .valid_ram_totals(self.display.installed_video())
+            .valid_ram_totals(self.installed_video())
             .map_err(|error| error.to_string())?;
         totals
             .into_iter()
@@ -319,15 +333,15 @@ impl Settings {
 
     fn validate_files(&self, base: &Path) -> Result<(), String> {
         let resolved = self.resolve(base);
-        let mut images = vec![
-            (
-                "Sun PROM".to_string(),
-                &resolved.prom,
-                1,
-                helios::machine::MAX_PROM_BYTES as u64,
-            ),
-            ("TurboGX ROM".to_string(), &resolved.cgsix_rom, 32768, 32768),
-        ];
+        let mut images = vec![(
+            "Sun PROM".to_string(),
+            &resolved.prom,
+            1,
+            helios::machine::MAX_PROM_BYTES as u64,
+        )];
+        if !resolved.headless && resolved.display == Display::Cgsix {
+            images.push(("TurboGX ROM".to_string(), &resolved.cgsix_rom, 32768, 32768));
+        }
         for (id, target) in resolved.scsi.iter().enumerate() {
             if let Some(kind) = target.kind.media_kind() {
                 let block = u64::from(kind.block_size());
@@ -375,6 +389,8 @@ impl Settings {
             && self.model == other.model
             && self.cpus == other.cpus
             && self.display == other.display
+            && self.headless == other.headless
+            && self.serial_pty_link == other.serial_pty_link
             && self.ram_mib == other.ram_mib
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
@@ -394,9 +410,13 @@ impl Settings {
     }
 
     pub fn resolve_paths(&mut self, base: &Path) {
-        for path in [&mut self.prom, &mut self.cgsix_rom]
-            .into_iter()
-            .chain(self.scsi.iter_mut().map(|target| &mut target.path))
+        for path in [
+            &mut self.prom,
+            &mut self.cgsix_rom,
+            &mut self.serial_pty_link,
+        ]
+        .into_iter()
+        .chain(self.scsi.iter_mut().map(|target| &mut target.path))
         {
             if !path.is_empty() && Path::new(path).is_relative() {
                 *path = base.join(&*path).to_string_lossy().into_owned();

@@ -9,7 +9,7 @@ and a status strip plus machine activity LEDs keep the essential state visible.
 
 The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
 or **Axil 320**. All three use sun4m and a **Sun Type 5 US keyboard**, with
-**128 MiB RAM by default**. SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus
+**128 MiB RAM by default**. In graphical mode, SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus
 card. SS-20 can use either its native **SX/CG14** framebuffer or a **TurboGX**
 card; select this with **F9 > General > Display** or `--display sx|cgsix`. The
 native SX option does not need a TurboGX ROM. F9's **Memory** row or
@@ -99,7 +99,7 @@ You can also select the machine and supply paths for this session:
   --cgsix-rom ../helios/local/firmware/turbogx.bin
 ```
 
-SS-5 and Axil 320 require a TurboGX ROM. SS-20 with `--display sx` does not.
+Graphical SS-5 and Axil 320 require a TurboGX ROM. SS-20 with `--display sx` and headless guests do not.
 
 **F9 > Media** exposes **SCSI IDs 0–6**. Each target can be a hard disk, a
 CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
@@ -132,7 +132,7 @@ printable ASCII characters. An existing label is rejected; select that
 machine first to update its settings.
 
 **F9 > General > Machine label** cycles saved machines alphabetically with
-Enter or a click. Each label recalls the model, CPU count, display, PROM and TurboGX
+Enter or a click. Each label recalls the model, CPU count, display, headless/PTY options, PROM and TurboGX
 ROM, all seven SCSI targets, disk access and networking. Smoothing, scanlines,
 shortcut hints and Tinker remain shared. Selection and edits stay in the
 draft until Save; Discard leaves the saved configuration and guest intact.
@@ -222,12 +222,13 @@ Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
 RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
 can be hidden. **Advanced** selects hard-disk read/write or read-only access.
 **General > Tinker** enables the Advanced diagnostics block with the core PC,
-step count, and recent printable serial A output. Serial output is diagnostic
-text, not a terminal emulator. Disk-access changes apply on the next cold reset.
+step count and a recent printable serial A excerpt. **Advanced > Serial console
+view** toggles the full terminal-style output view for headless guests; Save
+applies it immediately. Disk-access changes apply on the next cold reset.
 
 Settings remain a draft until **F9** validates and saves them successfully.
 Render options such as smoothing and scanlines apply immediately. Model,
-hardware display, RAM, firmware, media and disk-access changes apply at the
+hardware display, headless/PTY options, RAM, firmware, media and disk-access changes apply at the
 next **F5 cold reset**; saving them does not interrupt a running guest.
 Choosing **Discard** closes the draft without changing the machine. Reset
 replaces guest RAM and retains NVRAM; shut down a guest OS before resetting or
@@ -266,12 +267,27 @@ attempt network boot. After the memory test, capture input and use
 **Pause+A** to interrupt it. Helios documents its graphical `ok` prompt
 checkpoint; startup may take several minutes.
 
+## Headless serial console
+
+Enable **F9 > General > Tinker**, then **Advanced > Headless guest**. An optional
+**Serial PTY symlink** gives the machine a stable path, for example
+`/tmp/heliacal-ss20`. Save and boot, or confirm F5 after cleanly halting the guest.
+The Heliacal control window remains open and shows an 80x24 serial output
+screen, the active endpoint and minicom command. **Advanced > Serial console
+view** hides or shows that screen on Save, without restarting the guest. **Open serial terminal** and **Send serial BREAK** are also in
+Advanced. No framebuffer ROM is needed; SS-20 headless supports 512 MiB RAM.
+
+Original firmware needs initialized NVRAM; initialize a new machine graphically
+first. Existing boot settings and machine identity are preserved. See
+[serial console setup, lifecycle and firmware limits](docs/serial-console.md)
+for the CLI/config options, terminal requirements and reconnect behavior.
+
 ## Status and validation
 
 Implemented: real Helios execution on a worker thread, TurboGX and native
 SS-20 SX/CG14 presentation,
 Sun keyboard and mouse input, pause/resume, confirmed cold reset and quit, NVRAM
-persistence, named machine configurations, firmware/media selection, writable/read-only disk access, settings
+persistence, headless guests with serial PTYs, named machine configurations, firmware/media selection, writable/read-only disk access, settings
 drafts, display options, screenshots, and Tinker diagnostics. The included logo
 is used on the paused screen and as the window icon.
 
@@ -284,8 +300,9 @@ mouse capture/release, and a 20-pixel title-bar drag with an unchanged
 translated client image. A typed guest halt completes filesystem sync and
 returns to the graphical OBP prompt. These are specific installed-disk and
 desktop checkpoints; SX instruction coverage and full POST remain incomplete.
-Audio, interactive serial,
-clipboard-to-guest paste, and additional models are not provided yet. Host
+Serial keyboard input is available through the PTY; the embedded screen is an
+output view. Audio, in-window serial keyboard input, clipboard-to-guest paste,
+and additional models are not provided yet. Host
 networking is available as user-mode NAT: enable it in F9 > Network, then
 configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
 network (gateway 192.168.0.1), for example:

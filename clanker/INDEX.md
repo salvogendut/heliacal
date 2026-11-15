@@ -1,5 +1,11 @@
 # Agent notes
 
+- [serial-console-view.md](serial-console-view.md) — greyed headless Display row, live Advanced serial-view toggle, bounded ANSI terminal output, PTY fan-out and UI/Solaris validation.
+
+- [headless-pty-completion.md](headless-pty-completion.md) — implemented headless/TTYA PTY controls, original-OBP console selection, minicom/Solaris acceptance, lifecycle and cleanup.
+
+- [headless-pty-console.md](headless-pty-console.md) — issue #1: Tinker-gated headless guest startup, raw serial PTY, stable alias, optional minicom launcher and acceptance slices.
+
 - [ram-capacity-completion.md](ram-capacity-completion.md) — final core corrections, 48 frontend tests, maximum-RAM graphical consoles, input/reset/draft checks and cleanup.
 
 - [ram-capacity.md](ram-capacity.md) — issue #3 frontend handoff: shared RAM validation, F9/named-machine selection, actual allocation, cold replacement and acceptance.

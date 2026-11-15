@@ -34,6 +34,11 @@ pub enum Field {
     Rom,
     Scsi(usize),
     DiskAccess,
+    Headless,
+    SerialPtyLink,
+    OpenSerialTerminal,
+    SerialBreak,
+    SerialConsole,
     Network,
     Smoothing,
     Scanlines,
@@ -42,7 +47,10 @@ pub enum Field {
 }
 impl Field {
     pub fn is_path(self) -> bool {
-        matches!(self, Self::Prom | Self::Rom | Self::Scsi(_))
+        matches!(
+            self,
+            Self::Prom | Self::Rom | Self::Scsi(_) | Self::SerialPtyLink
+        )
     }
 }
 pub struct Row {
@@ -115,10 +123,26 @@ impl Overlay {
                 ("Memory", format!("{} MiB", self.draft.ram_mib), Field::Ram),
                 (
                     "Graphics",
-                    self.draft.model.graphics(self.draft.display).into(),
+                    if self.draft.headless {
+                        "Headless / serial TTYA".into()
+                    } else {
+                        self.draft.model.graphics(self.draft.display).into()
+                    },
                     Field::Fixed,
                 ),
-                ("Display", self.draft.display.label().into(), Field::Display),
+                (
+                    "Display",
+                    if self.draft.headless {
+                        "Headless".into()
+                    } else {
+                        self.draft.display.label().into()
+                    },
+                    if self.draft.headless {
+                        Field::Fixed
+                    } else {
+                        Field::Display
+                    },
+                ),
                 (
                     self.draft.model.prom_label(),
                     path_label(&self.draft.prom),
@@ -173,15 +197,51 @@ impl Overlay {
                 ("NAT gateway", "192.168.0.1".into(), Field::Fixed),
                 ("Guest setup", "DHCP or static le0".into(), Field::Fixed),
             ],
-            Tab::Advanced => vec![(
-                "Disk access",
-                if self.draft.disk_read_only {
-                    "Read-only".into()
-                } else {
-                    "Read/write".into()
-                },
-                Field::DiskAccess,
-            )],
+            Tab::Advanced => {
+                let mut rows = vec![(
+                    "Disk access",
+                    if self.draft.disk_read_only {
+                        "Read-only".into()
+                    } else {
+                        "Read/write".into()
+                    },
+                    Field::DiskAccess,
+                )];
+                if self.draft.tinker {
+                    rows.extend([
+                        (
+                            "Headless guest",
+                            on_off(self.draft.headless),
+                            Field::Headless,
+                        ),
+                        (
+                            "Serial PTY symlink",
+                            if self.draft.serial_pty_link.is_empty() {
+                                "Automatic /dev/pts endpoint".into()
+                            } else {
+                                self.draft.serial_pty_link.clone()
+                            },
+                            Field::SerialPtyLink,
+                        ),
+                        (
+                            "Open serial terminal",
+                            "Launch minicom for the running guest".into(),
+                            Field::OpenSerialTerminal,
+                        ),
+                        (
+                            "Send serial BREAK",
+                            "Interrupt the running guest console".into(),
+                            Field::SerialBreak,
+                        ),
+                        (
+                            "Serial console view",
+                            on_off(self.draft.show_serial_console),
+                            Field::SerialConsole,
+                        ),
+                    ]);
+                }
+                rows
+            }
             Tab::About => vec![],
         }
         .into_iter()
@@ -214,6 +274,7 @@ impl Overlay {
     }
     pub fn path(&self, field: Field) -> Option<&String> {
         match field {
+            Field::SerialPtyLink => Some(&self.draft.serial_pty_link),
             Field::Prom => Some(&self.draft.prom),
             Field::Rom => Some(&self.draft.cgsix_rom),
             Field::Scsi(id) => Some(&self.draft.scsi[id].path),
@@ -222,6 +283,7 @@ impl Overlay {
     }
     pub fn path_mut(&mut self, field: Field) -> Option<&mut String> {
         match field {
+            Field::SerialPtyLink => Some(&mut self.draft.serial_pty_link),
             Field::Prom => Some(&mut self.draft.prom),
             Field::Rom => Some(&mut self.draft.cgsix_rom),
             Field::Scsi(id) => Some(&mut self.draft.scsi[id].path),
@@ -271,6 +333,11 @@ impl Overlay {
                     self.adjust_ram_after_hardware_change();
                 }
             }
+            Field::Headless => {
+                self.draft.headless ^= true;
+                self.adjust_ram_after_hardware_change();
+            }
+            Field::SerialConsole => self.draft.show_serial_console ^= true,
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,

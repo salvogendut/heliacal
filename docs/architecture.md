@@ -58,7 +58,7 @@ SCC channel B; focus loss and capture release send button releases.
 delegates RAM validation and choices to the Helios profile API; RAM is part of
 cold-replacement detection but not machine identity or NVRAM paths. SS-20
 exposes a display choice: native SX/CG14 (no TurboGX ROM) or a TurboGX SBus
-card. SS-5 and Axil 320 require TurboGX. CGsix construction selects the
+card. Graphical SS-5 and Axil 320 require TurboGX. CGsix construction selects the
 no-VSIMM core path directly rather than removing SX after allocation.
 Configured image sizes/readability and read/write disk access are
 validated on save. Empty firmware paths are valid for an unconfigured desktop;
@@ -108,3 +108,42 @@ socket populations and exercise the actual F5 worker replacement: a guest
 write/read at 192 MiB distinguishes 128 MiB from 256 MiB installation. Cancel,
 Discard, failed Save and failed construction preserve the previous machine,
 catalog and NVRAM identity.
+
+## Serial PTY ownership
+
+`serial_pty.rs` owns a nonblocking Unix PTY and an optional locked, owned symlink
+on the machine worker. It preserves raw SCC A bytes; printable diagnostics are
+derived separately. Input is bounded and retained on SCC FIFO backpressure;
+receiver epochs and cold resets discard stale input. Paused workers service
+host transport at the existing bounded command wait without stepping the guest.
+No terminal process owns emulation, and slow readers cannot block the worker.
+
+Headless construction selects `InstalledVideo::None` before allocating RAM,
+skips CGsix loading, and retains keyboard presence for supported OBP startup.
+`obp_console.rs` adjusts only the two console variables in initialized NVRAM
+for pinned original PROMs. See [firmware details and limits](serial-console.md).
+The control panel displays the running endpoint, not an unsaved draft. Mode
+and alias changes use the existing confirmed cold-replacement transaction;
+failed replacement retains the old machine and PTY. `terminal.rs` runs only
+on an explicit Advanced action and uses argument vectors, never a shell.
+
+`serial_screen.rs` feeds the same raw SCC bytes into the pinned `vt100` parser
+on the worker, independent of visibility. Its 80x24 screen has no scrollback;
+the parser's default features are disabled to bound VTE OSC storage to 1024
+bytes. Changed immutable screen snapshots are published with normal status
+updates, at most roughly 30 times per second. SDL redraws the embedded view
+when its generation changes and groups adjacent cells with matching attributes.
+The renderer supports ANSI colours, underline and a static cursor using the
+existing ASCII glyph font. Terminal callbacks remain inert: the view sends no
+replies, keyboard input, clipboard operations or resize requests to the guest.
+
+The global `show_serial_console` preference is Tinker-gated in Advanced and
+applies on Save; it is excluded from hardware replacement and named-machine
+state. Disabling it leaves both the parser and PTY running, so the next visible
+snapshot is current. A cold replacement resets parser state together with the
+frame cache. General's Display row is fixed/grey while headless, showing
+Headless without changing the remembered graphical display choice.
+
+Parser reference: [vt100 0.18.1](https://docs.rs/crate/vt100/0.18.1), pinned in
+Cargo.lock. The no-std feature selection here bounds parser buffers; the
+frontend itself remains a normal std application.
