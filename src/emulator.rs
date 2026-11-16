@@ -73,6 +73,8 @@ pub struct Snapshot {
     /// Cold-boot notice; cleared by the first selected-console output.
     pub waiting_for_console: bool,
     pub shutdown_failed: bool,
+    /// True only after NVRAM persistence and worker/PTY cleanup, not guest halt.
+    pub shutdown_complete: bool,
     pub scsi_activity: [(u64, u64); SCSI_TARGETS],
     pub network_activity: u64,
 }
@@ -104,6 +106,7 @@ impl Default for Snapshot {
             firmware: None,
             waiting_for_console: false,
             shutdown_failed: false,
+            shutdown_complete: false,
             scsi_activity: [(0, 0); SCSI_TARGETS],
             network_activity: 0,
         }
@@ -963,6 +966,7 @@ fn run(
     drop(serial); // Remove only our alias before publishing final shutdown.
     state.serial_endpoint = None;
     state.phase = Phase::Stopped;
+    state.shutdown_complete = true;
     *shared.lock().unwrap() = state;
 }
 

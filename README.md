@@ -128,7 +128,7 @@ for verification commands, original-PROM precedence and NVRAM separation.
 | Click guest display / Ctrl+Enter | Capture / release keyboard and mouse; focus / release the headless console |
 | Ctrl+P | Boot, pause or resume |
 | Pause + A | Send Sun Stop-A; F13 can also serve as Stop |
-| F4 | Save the native-resolution guest framebuffer as PPM |
+| F4 | Save the native-resolution guest framebuffer as PPM, with 1984's shutter sound |
 | F5 | Confirm a cold reset using saved machine settings |
 | F9 | Open options; save an open settings draft |
 | Arrows / Enter / Escape | Navigate options, change a value, or close with Save/Discard/Cancel |
@@ -136,7 +136,9 @@ for verification commands, original-PROM precedence and NVRAM separation.
 | Enter / Ctrl+B / Ctrl+E | Choose an image with the file picker / browse / type its path |
 | Ctrl+Shift+V | Paste into the captured graphical guest or focused serial console |
 | Ctrl+Shift+C | Copy selected serial text, or the minicom command |
-| F11 / F12 | Toggle fullscreen / confirm quit |
+| Ctrl+Plus / Ctrl+Minus | Enlarge / shrink the window when not fullscreen |
+| F11 | Toggle fullscreen |
+| F12 | Quit; confirmation is skipped when the guest is STOPPED |
 
 Settings apply only after a successful Save. Display preferences apply
 immediately; hardware, firmware, media and disk-access changes require the

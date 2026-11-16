@@ -11,11 +11,12 @@
 | Ctrl+Shift+V | Paste into the focused serial console or captured graphical guest |
 | Wheel / scrollbar / Shift+PageUp or PageDown | Browse serial history; Shift+End returns to live output |
 | Pause + A | Sun Stop-A; F13 can also serve as Stop |
-| F4 | Save the guest framebuffer as a native-resolution PPM in the working directory |
+| F4 | Save the guest framebuffer as a native-resolution PPM in the working directory, with 1984's shutter sound |
 | F5 | Confirm a cold reset using the saved machine settings |
 | F9 | Open settings / save settings |
 | F11 | Toggle fullscreen |
-| F12 / window close | Confirm quit and save NVRAM |
+| Ctrl+Plus / Ctrl+Minus | Enlarge / shrink the window outside fullscreen |
+| F12 / window close | Quit and save NVRAM; no confirmation when the guest is STOPPED |
 | Shift + reserved function key | Pass the shifted function key to the guest while captured |
 
 In options, use **Left/Right** or **Tab/Shift+Tab** to switch sections,
@@ -26,6 +27,18 @@ pastes, **Ctrl+U** clears, and **Delete** detaches the selected image when
 outside text entry. **Escape** cancels text entry; with a changed draft it
 offers **Save**, **Discard**, or **Cancel**. Confirmation dialogs default to
 Cancel; use arrows and Enter, or click a choice.
+
+Window resizing preserves the current proportions, with a minimum of 720×570
+and a maximum that fits the display's usable area. **Ctrl+Equals** and the
+keypad Plus/Minus keys also work. These shortcuts work in the overlay, captured
+guest and serial console; they have no effect in fullscreen.
+
+The screenshot sound plays only after a successful save. It uses the same
+embedded recording as 1984 and does not require guest audio support. An
+unavailable host audio device does not prevent screenshots from being saved.
+Closing a STOPPED guest still waits for NVRAM to be saved and its PTY to close;
+a save failure leaves the window open for retry. This also applies to
+**STOPPED / CORE ERROR**. Running and paused guests retain the quit confirmation.
 
 File pickers remember the last chosen file across restarts, with separate
 locations for firmware (system PROM and TurboGX ROM), hard disks, and CDs.

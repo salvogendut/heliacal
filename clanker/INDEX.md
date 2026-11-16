@@ -1,5 +1,7 @@
 # Agent notes
 
+- [Desktop shortcuts and screenshot sound](desktop-shortcuts-and-sound.md) — window resizing, STOPPED quit without confirmation, shutdown completion, original 1984 shutter asset and isolated desktop/audio acceptance.
+
 - [File-picker history](file-picker-history.md) — persistent firmware/disk/CD locations, independent drafts, cancellation handling and isolated SDL dialog checks.
 
 - [README refresh](readme-refresh.md) — guide extraction, screenshot provenance, original ROM MD5 verification and the separately installed OpenBIOS clarification.

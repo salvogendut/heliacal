@@ -98,8 +98,17 @@ a configuration does not duplicate a disk.
 
 Normal shutdown saves NVRAM on the worker. If saving fails, the window stays
 open, the machine remains available, and a running guest is paused for retry.
+An already STOPPED guest (including a core error) skips the quit confirmation.
+The frontend waits for the worker's separate `shutdown_complete` flag after
+NVRAM persistence and PTY cleanup; guest power-off alone does not signal
+that shutdown has completed.
 The worker is joined on application exit; an abnormal UI exit also attempts
 to save NVRAM. This is firmware-state persistence, not a guest RAM snapshot.
+
+Screenshot feedback uses a lazily opened SDL playback stream on the main
+thread, with the original 1984 shutter WAV embedded in the executable. A
+successful F4 save queues the sound without waiting for playback; subsequent
+captures restart it. Audio errors do not affect the screenshot or machine.
 
 The frontend does not create or truncate disk images. Populated hard-disk
 targets use `ScsiBus::attach_disk_rw` by default and `ScsiBus::attach` when the

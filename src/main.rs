@@ -1,6 +1,8 @@
 mod activity;
 #[cfg(test)]
 mod chd_tests;
+#[cfg(test)]
+mod desktop_tests;
 mod disk_creation;
 mod emulator;
 mod file_picker;
@@ -17,8 +19,10 @@ mod serial_pty;
 mod serial_screen;
 mod serial_selection;
 mod settings;
+mod shutter;
 mod terminal;
 mod view;
+mod window_size;
 
 use emulator::{Emulator, Phase};
 use overlay::{Confirm, Field, Overlay};
@@ -125,7 +129,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nHeadless: click the serial console to type; Ctrl+Enter focuses/releases it.\nCopy command copies minicom; Ctrl+Shift+C copies selected serial text (or its command).\nCtrl+Shift+V pastes into the focused serial console or captured graphical guest.\nWheel/scrollbar or Shift+PageUp/PageDown browse serial history; Shift+End goes live.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot + shutter sound   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Quit (no confirmation when STOPPED)\nCtrl+Plus / Ctrl+Minus Resize window outside fullscreen (Ctrl+Equals/keypad also work).\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nHeadless: click the serial console to type; Ctrl+Enter focuses/releases it.\nCopy command copies minicom; Ctrl+Shift+C copies selected serial text (or its command).\nCtrl+Shift+V pastes into the focused serial console or captured graphical guest.\nWheel/scrollbar or Shift+PageUp/PageDown browse serial history; Shift+End goes live.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -210,6 +214,7 @@ struct App {
     confirm: Option<(Confirm, usize)>,
     picker: Option<FilePicker>,
     picker_history: file_picker::History,
+    shutter: Option<shutter::Shutter>,
     creation: Option<disk_creation::Creation>,
     held: input::HeldKeys,
     captured: bool,
@@ -236,6 +241,25 @@ impl App {
     fn ask(&mut self, confirm: Confirm) {
         self.release();
         self.confirm = Some((confirm, confirm.default_choice()));
+    }
+    fn request_quit(&mut self) {
+        if self.quitting {
+            return;
+        }
+        if self.creation.is_some() {
+            self.notify("Disk creation is finishing; retry Quit when it completes.");
+        } else if matches!(
+            self.emulator.snapshot().phase,
+            Phase::Stopped | Phase::Failed
+        ) {
+            self.release();
+            match self.emulator.shutdown() {
+                Ok(()) => self.quitting = true,
+                Err(error) => self.notify(error),
+            }
+        } else {
+            self.ask(Confirm::Quit);
+        }
     }
     fn save(&mut self) {
         let Some(o) = &mut self.overlay else {
@@ -450,6 +474,19 @@ impl App {
             .flat_map(|p| p[..3].iter().copied())
             .collect();
         file.write_all(&rgb)?;
+        drop(file);
+        // Host feedback is optional; audio failure must not fail a saved image.
+        if self.shutter.is_none() {
+            match shutter::Shutter::new() {
+                Ok(sound) => self.shutter = Some(sound),
+                Err(error) => eprintln!("Screenshot sound unavailable: {error}"),
+            }
+        }
+        if let Some(sound) = &self.shutter
+            && let Err(error) = sound.play()
+        {
+            eprintln!("Screenshot sound unavailable: {error}");
+        }
         self.notify(format!("Saved guest display to {path}"));
         Ok(())
     }
@@ -684,7 +721,7 @@ impl App {
         } else if key == Scancode::F5 && !shift {
             self.ask(Confirm::Reset);
         } else if key == Scancode::F12 && !shift {
-            self.ask(Confirm::Quit);
+            self.request_quit();
         } else if key == Scancode::F11 && !shift {
             window.set_fullscreen(window.fullscreen_state() == sdl3::video::FullscreenType::Off)?;
         } else if key == Scancode::F4 && !shift {
@@ -785,6 +822,7 @@ fn run(options: Options) -> Result<()> {
         confirm: None,
         picker: None,
         picker_history,
+        shutter: None,
         creation: None,
         held: input::HeldKeys::default(),
         captured: false,
@@ -807,7 +845,7 @@ fn run(options: Options) -> Result<()> {
         .high_pixel_density()
         .position_centered()
         .build()?;
-    window.set_minimum_size(720, 570)?;
+    window.set_minimum_size(window_size::MINIMUM.0, window_size::MINIMUM.1)?;
     let (mut logo_bytes, lw, lh) = logo()?;
     let icon =
         sdl3::surface::Surface::from_data(&mut logo_bytes, lw, lh, lw * 4, PixelFormat::RGBA32)?;
@@ -857,6 +895,7 @@ fn run(options: Options) -> Result<()> {
     let mut grabbed: Option<bool> = None;
     let mut scale_mode: Option<ScaleMode> = None;
     let mut pending_event: Option<Event> = None;
+    let mut resizer = window_size::Resizer::default();
     let started = Instant::now();
     let mut display_at: Option<Instant> = None;
     if options.boot_smoke {
@@ -868,16 +907,15 @@ fn run(options: Options) -> Result<()> {
             event_seen = true;
             match event {
                 Event::Quit { .. } => {
-                    if app.creation.is_some() {
-                        app.notify("Disk creation is finishing; retry Quit when it completes.");
-                    } else {
-                        app.ask(Confirm::Quit);
-                    }
+                    app.request_quit();
                 }
                 Event::Window {
                     win_event: WindowEvent::FocusLost,
                     ..
-                } => app.release(),
+                } => {
+                    resizer.focus_lost();
+                    app.release();
+                }
                 Event::KeyDown {
                     scancode: Some(key),
                     keycode,
@@ -885,7 +923,17 @@ fn run(options: Options) -> Result<()> {
                     repeat,
                     ..
                 } if app.picker.is_none() && app.creation.is_none() => {
-                    let result = if app.serial_history_key(key, keymod) {
+                    let result = if let Some(increase) = window_size::shortcut(key, keycode, keymod)
+                    {
+                        resizer.key_down(key);
+                        if !repeat && !app.quitting {
+                            resizer
+                                .request(canvas.window(), increase)
+                                .map_err(Into::into)
+                        } else {
+                            Ok(())
+                        }
+                    } else if app.serial_history_key(key, keymod) {
                         Ok(())
                     } else if app.serial_focused && !serial_input::reserved(key, keymod) {
                         app.serial_key(key, keycode, keymod)
@@ -902,13 +950,18 @@ fn run(options: Options) -> Result<()> {
                     scancode: Some(key),
                     ..
                 } => {
+                    resizer.key_up(key);
                     if let Some((code, down)) = app.held.event(key, false)
                         && !app.emulator.key(code, down)
                     {
                         app.release();
                     }
                 }
-                Event::TextInput { text, .. } if app.picker.is_none() && app.creation.is_none() => {
+                Event::TextInput { text, .. }
+                    if app.picker.is_none()
+                        && app.creation.is_none()
+                        && !resizer.suppress_text() =>
+                {
                     if let Some(edit) = app.overlay.as_mut().and_then(|o| o.edit.as_mut()) {
                         let remaining = 4096usize.saturating_sub(edit.len());
                         edit.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
@@ -1071,6 +1124,10 @@ fn run(options: Options) -> Result<()> {
                 }
                 _ => {}
             }
+        }
+        match resizer.apply(canvas.window_mut()) {
+            Ok(changed) => redraw |= changed,
+            Err(error) => app.notify(format!("Window resize failed: {error}")),
         }
         let polled = app
             .picker
@@ -1489,7 +1546,7 @@ fn run(options: Options) -> Result<()> {
                 return Err("Timed out waiting for guest display output".into());
             }
         }
-        if app.quitting && state.phase == Phase::Stopped {
+        if app.quitting && state.shutdown_complete {
             if let Some(error) = state.error {
                 return Err(error.into());
             }

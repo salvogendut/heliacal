@@ -107,6 +107,7 @@ fn app(settings: Settings, config: PathBuf) -> App {
         confirm: None,
         picker: None,
         picker_history: file_picker::History::default(),
+        shutter: None,
         creation: None,
         held: input::HeldKeys::default(),
         captured: false,

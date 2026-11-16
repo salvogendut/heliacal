@@ -39,7 +39,7 @@ Axil/TurboGX CDE on 2026-11-15. The original PPMs were converted losslessly
 to PNG, preserving every pixel without scaling or frontend notifications.
 
 Native desktop file-picker behavior and non-Linux hosts need interactive
-validation. Native Wayland input was not separately replayed. Audio and
+validation. Native Wayland input was not separately replayed. Guest audio and
 additional machine models are not provided. Networking limits are documented
 in [Networking](networking.md); OpenBIOS compatibility and limits are in
 [Firmware selection](firmware.md).
@@ -69,4 +69,7 @@ Picker checks cover separate firmware/disk/CD history, persistence across
 restarts and Discard, relative and missing paths, and new-disk destinations.
 The SDL smoke also verifies that an empty picker result leaves both the
 draft and saved picker history unchanged.
+Desktop tests cover proportional resizing and its limits, host keyboard
+layouts, STOPPED guests quitting without confirmation, NVRAM save/retry and
+PTY cleanup, and confirmation for running or paused guests.
 See [architecture](architecture.md) for the frontend/core boundary.
