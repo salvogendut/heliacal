@@ -22,7 +22,8 @@
 - Preserve user firmware and media. Current frontend attachments are
   read/write by default, with an Advanced read-only option; CDs remain read-only.
   Keep firmware and disk images under ignored local/; use temporary
-  configurations and NVRAM in smoke tests.
+  configurations and NVRAM in smoke tests. Include the intended SCSI ID in
+  new guest/test disk filenames, for example `netbsd11-ss20-scsi3.chd`.
 - Keep README status accurate. A rendered firmware banner does not establish
   an OS boot or installation. Do not claim placeholder controls implement
   emulation.

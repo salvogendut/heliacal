@@ -6,7 +6,7 @@ publish = false
 description = "A Happy Years desktop frontend for the Helios SPARC emulator"
 
 [dependencies]
-helios = { path = "../helios" }
+helios = { path = "../helios", features = ["chd"] }
 sdl3 = "0.20"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

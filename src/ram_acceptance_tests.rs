@@ -106,6 +106,7 @@ fn app(settings: Settings, config: PathBuf) -> App {
         overlay: None,
         confirm: None,
         picker: None,
+        creation: None,
         held: input::HeldKeys::default(),
         captured: false,
         quitting: false,

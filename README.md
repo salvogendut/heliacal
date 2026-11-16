@@ -64,7 +64,7 @@ Dev/
   heliacal/
 ```
 
-Use a current Rust toolchain (edition 2024), Cargo, a native linker, and SDL3
+Use a current stable Rust toolchain (edition 2024), Cargo, a C++17 compiler, a native linker, and SDL3
 development libraries. SDL3 is linked dynamically; SDL_ttf and SDL_image are
 not required. On a Fedora development system, the native dependencies are
 `gcc`, `make`, and `SDL3-devel`.
@@ -350,3 +350,36 @@ The choice is stored per named machine as `accurate_cpu_clocks = false`.
 Save applies it to the next boot; an existing guest requires confirmed **F5**
 replacement so firmware and Solaris recalibrate. Discard/Cancel leave the
 running clock unchanged. Labels, NVRAM identity and disk paths are retained.
+
+## CHD disks and new images
+
+Heliacal enables Helios's CHD hard-disk backend. Existing raw disks and cooked
+ISO CDs continue to work. CHDs must be v5 hard disks with 512-byte sectors;
+CHD CDs/DVDs/audio and arbitrary parent chains are not supported.
+
+F9 → Media → **New blank CHD disk...** lets you choose the destination,
+capacity in MiB (2048 by default), and an unused SCSI target. Enter chooses a
+path in the save dialog; Ctrl+E also lets you type it. The suggested filename
+includes the selected target, such as `new-disk-scsi3.chd`. Keep the intended
+SCSI ID in custom disk names and attach them at that ID. Select **Create blank
+disk** to create an uncompressed, sparse, zero-filled CHD. Existing files are
+never overwritten. The form can be cancelled before creation; while the
+short creation job finishes, editing and Quit wait for completion. A failed
+creation leaves the form available for correction.
+
+The completed image is attached only to the settings draft. Save and the
+usual confirmed F5 reset apply it to the machine. Discard keeps the created
+file on disk. The guest installer must label and format this new disk.
+
+Compressed CHD disks keep guest writes in a persistent `.diff.chd` companion
+appended to the full image filename. Keep that file with the base. No automatic
+merge or deletion happens on shutdown. Uncompressed CHDs without a companion
+are written in place. Advanced → Disk access → Read-only also reads existing
+child data but never creates a child. Merely saving settings creates none.
+Malformed/mismatched companions produce errors rather than silently reverting
+to the base. Do not open the same writable image in multiple machines.
+
+CHD codecs are built from the pinned `libchdman-rs` dependency in Helios; no
+external `chdman` executable is needed at runtime. See Helios
+[storage documentation](../helios/docs/scsi.md) for the format and durability
+limits. The core CLI can also create raw or CHD disks with `create-disk`.

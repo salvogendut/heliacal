@@ -345,14 +345,15 @@ impl Settings {
             images.push(("TurboGX ROM".to_string(), &resolved.cgsix_rom, 32768, 32768));
         }
         for (id, target) in resolved.scsi.iter().enumerate() {
-            if let Some(kind) = target.kind.media_kind() {
-                let block = u64::from(kind.block_size());
-                images.push((
-                    format!("SCSI {id} {}", target.kind.label()),
+            if let Some(kind) = target.kind.media_kind()
+                && !target.path.is_empty()
+            {
+                helios::media::validate_attachment(
                     &target.path,
-                    block,
-                    block * (1u64 << 32),
-                ));
+                    kind,
+                    target.kind == TargetKind::Disk && !resolved.disk_read_only,
+                )
+                .map_err(|e| format!("SCSI {id} {}: {}: {e}", target.kind.label(), target.path))?;
             }
         }
         for (label, path, block, maximum) in images {
@@ -378,17 +379,6 @@ impl Settings {
             let rom = fs::read(&resolved.cgsix_rom).map_err(|e| format!("TurboGX ROM: {e}"))?;
             helios::devices::cgsix::Cgsix::validate_rom(&rom)
                 .map_err(|e| format!("TurboGX ROM: {e:?}"))?;
-        }
-        if !self.disk_read_only {
-            for (id, target) in resolved.scsi.iter().enumerate() {
-                if target.kind == TargetKind::Disk && !target.path.is_empty() {
-                    fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(&target.path)
-                        .map_err(|e| format!("SCSI {id} Hard disk: {}: {e}", target.path))?;
-                }
-            }
         }
         Ok(())
     }

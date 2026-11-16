@@ -155,3 +155,18 @@ attaching keyboard, storage or host endpoints. This selects nominal 85/75 MHz
 for both processors, while the core remains the sole owner of elapsed time.
 Clock changes participate in hardware_eq and the existing confirmed cold
 replacement; there is no live timebase switch or NVRAM identity change.
+
+## Host media and explicit creation
+
+Settings validation delegates to `helios::media::validate_attachment`, including
+inactive named-machine records. It checks logical media geometry; CHD host
+container size is never guest capacity. Validation does not create a companion.
+The emulator worker opens actual media while building a replacement, preserving
+the old guest if construction fails. Native CHD handles stay on that worker.
+
+`disk_creation.rs` runs sparse CHD creation on a short-lived worker. SDL keeps
+polling; the creation form is held until completion so a result cannot attach
+to a different draft. Path selection/Cancel are separate from explicit Create.
+The worker publishes through the core's private-file/no-overwrite helper.
+Successful creation changes only a draft target, leaving Save/F5 and named
+NVRAM identity unchanged. Discard never deletes the newly created user file.

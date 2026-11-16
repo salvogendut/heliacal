@@ -1,4 +1,7 @@
 mod activity;
+#[cfg(test)]
+mod chd_tests;
+mod disk_creation;
 mod emulator;
 #[cfg(test)]
 mod headless_tests;
@@ -119,7 +122,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -203,6 +206,7 @@ struct App {
     overlay: Option<Overlay>,
     confirm: Option<(Confirm, usize)>,
     picker: Option<FilePicker>,
+    creation: Option<disk_creation::Creation>,
     held: input::HeldKeys,
     captured: bool,
     quitting: bool,
@@ -225,6 +229,10 @@ impl App {
         let Some(o) = &mut self.overlay else {
             return;
         };
+        if o.new_disk.is_some() {
+            self.notify("Create or cancel the new disk before saving settings.");
+            return;
+        }
         if let Err(error) = o.finish_edit() {
             self.notify(error);
             return;
@@ -247,6 +255,12 @@ impl App {
         }
     }
     fn close_overlay(&mut self) {
+        if let Some(o) = &mut self.overlay
+            && o.new_disk.is_some()
+        {
+            o.cancel_new_disk();
+            return;
+        }
         if self
             .overlay
             .as_ref()
@@ -265,7 +279,7 @@ impl App {
         let filters: &[DialogFileFilter] = match field {
             Field::Prom => &PROM_FILTERS,
             Field::Rom => &ROM_FILTERS,
-            Field::Scsi(_) => &MEDIA_FILTERS,
+            Field::Scsi(_) | Field::NewDiskPath => &MEDIA_FILTERS,
             Field::SerialPtyLink => {
                 if let Some(o) = &mut self.overlay {
                     o.activate();
@@ -288,15 +302,37 @@ impl App {
                 }
             });
         let (send, receive) = mpsc::sync_channel(1);
-        sdl3::dialog::show_open_file_dialog(
-            filters,
-            location,
-            false,
-            window,
-            Box::new(move |files, _| {
+        let callback: sdl3::dialog::DialogCallback = Box::new(
+            move |files: std::result::Result<Vec<PathBuf>, sdl3::dialog::DialogError>, _| {
                 let _ = send.try_send(files.map_err(|e| e.to_string()));
-            }),
-        )
+            },
+        );
+        if field == Field::NewDiskPath {
+            let target = self
+                .overlay
+                .as_ref()
+                .and_then(|o| o.new_disk.as_ref())
+                .map_or(3, |disk| disk.target);
+            let destination = location.or_else(|| {
+                Some(
+                    self.config
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join(format!("new-disk-scsi{target}.chd")),
+                )
+            });
+            sdl3::dialog::show_save_file_dialog(
+                &[DialogFileFilter {
+                    name: "CHD hard disk",
+                    pattern: "chd",
+                }],
+                destination,
+                window,
+                callback,
+            )
+        } else {
+            sdl3::dialog::show_open_file_dialog(filters, location, false, window, callback)
+        }
         .map_err(|e| e.to_string())?;
         self.picker = Some((field, receive));
         Ok(())
@@ -309,7 +345,24 @@ impl App {
     fn activate(&mut self, window: &sdl3::video::Window) -> std::result::Result<(), String> {
         let notice = if let Some(o) = &mut self.overlay {
             let field = o.field();
-            if field == Field::OpenSerialTerminal || field == Field::SerialBreak {
+            if field == Field::CreateDisk {
+                let disk = o.new_disk.as_ref().ok_or("No disk creation draft")?;
+                if disk.path.is_empty() {
+                    return Err("Choose a destination first.".into());
+                }
+                let path = PathBuf::from(&disk.path);
+                let path = if path.is_relative() {
+                    self.config.parent().unwrap_or(Path::new(".")).join(path)
+                } else {
+                    path
+                };
+                self.creation = Some(disk_creation::Creation::start(
+                    path,
+                    disk.size_mib,
+                    disk.target,
+                )?);
+                Some("Creating blank CHD disk...".into())
+            } else if field == Field::OpenSerialTerminal || field == Field::SerialBreak {
                 let state = self.emulator.snapshot();
                 let endpoint = state.serial_endpoint.as_deref().ok_or(
                     "Boot a headless machine first; draft changes apply after Save and F5.",
@@ -589,6 +642,7 @@ fn run(options: Options) -> Result<()> {
         overlay: None,
         confirm: None,
         picker: None,
+        creation: None,
         held: input::HeldKeys::default(),
         captured: false,
         quitting: false,
@@ -664,7 +718,13 @@ fn run(options: Options) -> Result<()> {
         for event in pending_event.take().into_iter().chain(events.poll_iter()) {
             event_seen = true;
             match event {
-                Event::Quit { .. } => app.ask(Confirm::Quit),
+                Event::Quit { .. } => {
+                    if app.creation.is_some() {
+                        app.notify("Disk creation is finishing; retry Quit when it completes.");
+                    } else {
+                        app.ask(Confirm::Quit);
+                    }
+                }
                 Event::Window {
                     win_event: WindowEvent::FocusLost,
                     ..
@@ -674,7 +734,7 @@ fn run(options: Options) -> Result<()> {
                     keymod,
                     repeat: false,
                     ..
-                } if app.picker.is_none() => {
+                } if app.picker.is_none() && app.creation.is_none() => {
                     if let Err(error) = app.key(key, keymod, &video, canvas.window_mut()) {
                         app.notify(error.to_string());
                     }
@@ -689,7 +749,7 @@ fn run(options: Options) -> Result<()> {
                         app.release();
                     }
                 }
-                Event::TextInput { text, .. } if app.picker.is_none() => {
+                Event::TextInput { text, .. } if app.picker.is_none() && app.creation.is_none() => {
                     if let Some(edit) = app.overlay.as_mut().and_then(|o| o.edit.as_mut()) {
                         let remaining = 4096usize.saturating_sub(edit.len());
                         edit.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
@@ -713,7 +773,11 @@ fn run(options: Options) -> Result<()> {
                     x,
                     y,
                     ..
-                } if app.picker.is_none() && !app.quitting && !app.captured => {
+                } if app.picker.is_none()
+                    && app.creation.is_none()
+                    && !app.quitting
+                    && !app.captured =>
+                {
                     let (x, y) = view::point(x, y, canvas.window().size());
                     if let Some((action, choice)) = app.confirm.as_mut() {
                         if let Some(index) = view::confirm_choice_at(x, y, action.choices().len()) {
@@ -723,7 +787,9 @@ fn run(options: Options) -> Result<()> {
                     } else if let Some(o) = app.overlay.as_mut() {
                         if o.edit.is_none() {
                             if (150..178).contains(&y) && (128..808).contains(&x) {
-                                if let Some(tab) = o.tabs().get(((x - 128) / 112) as usize) {
+                                if let Some(tab) = o.tabs().get(((x - 128) / 112) as usize)
+                                    && o.new_disk.is_none()
+                                {
                                     o.tab = *tab;
                                     o.selected = 0;
                                 }
@@ -777,6 +843,19 @@ fn run(options: Options) -> Result<()> {
                 redraw = true;
             }
             Some((_, Err(mpsc::TryRecvError::Empty))) | None => {}
+        }
+        if app.creation.as_ref().is_some_and(|job| job.is_finished()) {
+            let creation = app.creation.take().unwrap();
+            match creation.finish() {
+                Ok((path, target)) => {
+                    if let Some(overlay) = &mut app.overlay {
+                        overlay.disk_created(target, path.display().to_string());
+                    }
+                    app.notify("Disk created and attached to draft. Save, then F5 to apply. Discard keeps the new file.");
+                }
+                Err(error) => app.notify(format!("Disk creation failed: {error}")),
+            }
+            redraw = true;
         }
         let text_input = video.text_input();
         let editing = app.overlay.as_ref().is_some_and(|o| o.edit.is_some());
@@ -928,8 +1007,8 @@ fn run(options: Options) -> Result<()> {
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
                 let base = app.config.parent().unwrap();
-                let disk = base.join("smoke-disk.raw");
-                let cdrom = base.join("smoke-cd.iso");
+                let disk = base.join("smoke-disk-scsi0.raw");
+                let cdrom = base.join("smoke-cd-scsi1.iso");
                 std::fs::write(&disk, vec![0; 512])?;
                 std::fs::write(&cdrom, vec![0; 2048])?;
                 for (id, path, cycles) in [(0, disk, 1), (1, cdrom, 2)] {
@@ -945,6 +1024,51 @@ fn run(options: Options) -> Result<()> {
                 assert_eq!(saved.scsi[0].kind, TargetKind::Disk);
                 assert_eq!(saved.scsi[1].kind, TargetKind::Cdrom);
                 assert!(!saved.scsi[0].path.is_empty() && !saved.scsi[1].path.is_empty());
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.notice = None;
+                // Exercise creation through the same form and worker as the UI.
+                // The native save dialog is covered separately; the smoke uses
+                // its deterministic temporary path callback.
+                let created = app.config.parent().unwrap().join("smoke-new-scsi3.chd");
+                let o = app.overlay.as_mut().unwrap();
+                o.selected = o
+                    .rows()
+                    .iter()
+                    .position(|r| r.field == Field::NewDisk)
+                    .unwrap();
+                o.activate();
+                assert_eq!(o.new_disk.as_ref().unwrap().target, 3);
+                o.new_disk.as_mut().unwrap().size_mib = 1;
+                app.picked(Field::NewDiskPath, &created);
+                let o = app.overlay.as_mut().unwrap();
+                o.selected = o
+                    .rows()
+                    .iter()
+                    .position(|r| r.field == Field::CreateDisk)
+                    .unwrap();
+                app.activate(canvas.window())?;
+                let (path, target) = app.creation.take().unwrap().finish()?;
+                app.overlay
+                    .as_mut()
+                    .unwrap()
+                    .disk_created(target, path.display().to_string());
+                assert!(app.settings.scsi[3].path.is_empty());
+                // Discard settings retains the explicitly created file.
+                app.close_overlay();
+                app.confirm = Some((Confirm::Unsaved, 1));
+                app.confirm();
+                assert!(created.is_file() && app.settings.scsi[3].path.is_empty());
+                app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
+                app.picked(Field::Scsi(3), &created);
+                app.save();
+                assert_eq!(
+                    Settings::load(&app.config)?.scsi[3].path,
+                    created.display().to_string()
+                );
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
