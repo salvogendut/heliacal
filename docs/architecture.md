@@ -1,5 +1,7 @@
 # Frontend architecture
 
+[Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
+
 Heliacal links the current sibling `../helios` library through a Cargo path
 dependency. CPU, firmware execution, bus mapping, graphics, keyboard protocol,
 SCSI behavior, and guest time belong to Helios. Heliacal adds host presentation,
@@ -227,4 +229,4 @@ Changing firmware saves the old environment and loads the new one without
 conversion. Headless/graphical selection is passed to replacement firmware;
 Sun OBP's profile-specific environment selection remains separate. Core RAM
 and frontend native-SX firmware limits are checked before allocation or media
-attachment. See [core firmware notes](../../helios/docs/firmware.md).
+attachment. See [core firmware notes](https://github.com/salvogendut/helios/blob/main/docs/firmware.md).

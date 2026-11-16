@@ -6,7 +6,7 @@ model = "sparcstation5"
 display = "cgsix"
 # F9 > General > Tinker exposes these under Advanced. Headless keeps the control window.
 # Original OBP needs initialized NVRAM; OpenBIOS gets separate fresh state.
-# See docs/serial-console.md and README firmware selection.
+# See docs/serial-console.md and docs/firmware.md.
 headless = false
 # Advanced: false = faster boots (100 ns); true = nominal 85/75 MHz rates.
 # Saved per named machine; applies at next boot / confirmed F5.

@@ -1,5 +1,7 @@
 # Agent notes
 
+- [README refresh](readme-refresh.md) — guide extraction, screenshot provenance, original ROM MD5 verification and the separately installed OpenBIOS clarification.
+
 - [Interactive headless console](gui-serial-console.md) — focused TTYA typing, bounded scrollback and selection, dark rendering, serial/graphical clipboard paste, and NetBSD SDL acceptance.
 
 - [Automatic OpenBIOS fallback](openbios-fallback.md) — shared selection, separate NVRAM, original-OBP regressions, graphical/PTY input acceptance, and startup notice, native-search firmware speedup and validated empty-PROM CLI override.

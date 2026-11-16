@@ -1,5 +1,7 @@
 # Headless guests and serial consoles
 
+[Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
+
 Heliacal keeps its control window when a guest is headless. The machine has no
 framebuffer or VSIMM; its console uses SCC channel A (TTYA), exposed as a Unix
 PTY. The guest keyboard remains electrically present for original firmware
@@ -155,7 +157,7 @@ graphical mode. Other NVRAM bytes, including boot policy, device paths, IDPROM
 and clock, are preserved. No PROM instructions are patched.
 
 The frontend recognizes firmware by image size and CRC32, matching the core's
-[pinned firmware references](../../helios/docs/firmware.md):
+[pinned firmware references](https://github.com/salvogendut/helios/blob/main/docs/firmware.md):
 
 | Profile | Original image | Size | CRC32 | Input / output count offsets |
 | --- | --- | ---: | --- | --- |
@@ -180,7 +182,7 @@ machine graphically first. This is not a full-POST implementation or a repair
 for corrupt firmware state. An unrecognized PROM is left untouched and reports
 that automatic console selection is unavailable on stderr; configure its own
 serial console before using it headlessly. OpenBIOS instead uses its separate
-CHRP environment and explicit console selection; see [firmware selection](../README.md#firmware-selection).
+CHRP environment and explicit console selection; see [firmware selection](firmware.md).
 
 ## Solaris disk paths and clock reporting
 
@@ -189,7 +191,7 @@ links and `/etc/path_to_inst` refer to the SS-5 SBus map. A boot failure naming
 `/usr`, missing `/usr/sbin/fsck`, or `no such device` can result from those
 stale paths. It is independent of serial versus graphical console selection
 and of the supported 512 MiB RAM size. Use a disk installed for the selected
-model, or migrate a copy using the [Helios SCSI migration procedure](../../helios/docs/scsi.md).
+model, or migrate a copy using the [Helios SCSI migration procedure](https://github.com/salvogendut/helios/blob/main/docs/scsi.md).
 Preserve the original disk; selecting another model does not rewrite guest paths.
 
 With **Advanced > Accurate CPU clocks** on, named profiles use 85 MHz for
