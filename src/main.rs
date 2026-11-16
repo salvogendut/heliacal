@@ -11,8 +11,10 @@ mod overlay;
 mod profiles;
 #[cfg(test)]
 mod ram_acceptance_tests;
+mod serial_input;
 mod serial_pty;
 mod serial_screen;
+mod serial_selection;
 mod settings;
 mod terminal;
 mod view;
@@ -22,7 +24,7 @@ use overlay::{Confirm, Field, Overlay};
 use sdl3::{
     dialog::DialogFileFilter,
     event::{Event, WindowEvent},
-    keyboard::{Mod, Scancode},
+    keyboard::{Keycode, Mod, Scancode},
     pixels::PixelFormat,
     render::ScaleMode,
 };
@@ -122,7 +124,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nHeadless: click the serial console to type; Ctrl+Enter focuses/releases it.\nCopy command copies minicom; Ctrl+Shift+C copies selected serial text (or its command).\nCtrl+Shift+V pastes into the focused serial console or captured graphical guest.\nWheel/scrollbar or Shift+PageUp/PageDown browse serial history; Shift+End goes live.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -209,6 +211,10 @@ struct App {
     creation: Option<disk_creation::Creation>,
     held: input::HeldKeys,
     captured: bool,
+    serial_focused: bool,
+    serial_selection: Option<serial_selection::Selection>,
+    serial_scroll_drag: Option<i32>,
+    serial_wheel: f32,
     quitting: bool,
     notice: Option<(String, Instant)>,
 }
@@ -218,6 +224,10 @@ impl App {
     }
     fn release(&mut self) {
         self.captured = false;
+        self.serial_focused = false;
+        self.serial_scroll_drag = None;
+        self.serial_selection = None;
+        self.serial_wheel = 0.0;
         self.held.clear();
         self.emulator.release_keys();
     }
@@ -448,6 +458,124 @@ impl App {
         self.notify(format!("Saved guest display to {path}"));
         Ok(())
     }
+    fn copy_serial_command(&mut self, video: &sdl3::VideoSubsystem) -> Result<()> {
+        let state = self.emulator.snapshot();
+        let endpoint = state
+            .serial_endpoint
+            .as_deref()
+            .ok_or("Boot a headless machine to create its serial endpoint.")?;
+        video
+            .clipboard()
+            .set_clipboard_text(&terminal::recipe(endpoint))?;
+        self.notify("Minicom command copied to clipboard.");
+        Ok(())
+    }
+    fn serial_controls(&self) -> bool {
+        self.settings.show_serial_console
+            && self.overlay.is_none()
+            && self.confirm.is_none()
+            && self.picker.is_none()
+            && self.creation.is_none()
+            && !self.quitting
+            && {
+                let state = self.emulator.snapshot();
+                state.headless && state.has_machine
+            }
+    }
+    fn scroll_serial(&mut self, request: serial_screen::Scroll) {
+        self.serial_selection = None;
+        let state = self.emulator.snapshot();
+        self.emulator
+            .scroll_serial(state.serial_input_generation, request);
+    }
+    fn serial_history_key(&mut self, key: Scancode, mods: Mod) -> bool {
+        if !self.serial_controls() {
+            return false;
+        }
+        if key == Scancode::Escape && self.serial_selection.is_some() {
+            self.serial_selection = None;
+            return true;
+        }
+        if !mods.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD)
+            || mods.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD | Mod::LALTMOD | Mod::RALTMOD)
+        {
+            return false;
+        }
+        use serial_screen::Scroll;
+        let request = match key {
+            Scancode::PageUp => Scroll::By(24),
+            Scancode::PageDown => Scroll::By(-24),
+            Scancode::Home => Scroll::To(self.emulator.snapshot().serial_screen.history),
+            Scancode::End => Scroll::To(0),
+            _ => return false,
+        };
+        self.scroll_serial(request);
+        true
+    }
+    fn copy_console_text(&mut self, video: &sdl3::VideoSubsystem) -> Result<()> {
+        if let Some(selection) = &self.serial_selection
+            && selection.nonempty()
+        {
+            video.clipboard().set_clipboard_text(&selection.text())?;
+            self.notify("Selected console text copied.");
+            Ok(())
+        } else {
+            self.copy_serial_command(video)
+        }
+    }
+    fn paste_clipboard(&mut self, video: &sdl3::VideoSubsystem) -> Result<()> {
+        let state = self.emulator.snapshot();
+        if state.phase != Phase::Running {
+            return Err("Start or resume the guest before pasting.".into());
+        }
+        let text = video.clipboard().clipboard_text()?;
+        if state.headless {
+            if !self.serial_focused {
+                return Err("Click the serial console before pasting.".into());
+            }
+            let bytes = serial_input::paste_bytes(&text, state.serial_screen.bracketed_paste)?;
+            self.emulator
+                .serial_input(state.serial_input_generation, &bytes)?;
+            self.serial_selection = None;
+        } else {
+            if !self.captured {
+                return Err("Capture the guest display before pasting.".into());
+            }
+            let keys = input::paste_events(&text)?;
+            self.emulator
+                .paste_keys(state.serial_input_generation, keys)?;
+            self.held.clear();
+        }
+        self.notify("Pasting to the guest. Ctrl+Enter releases input and cancels queued paste.");
+        Ok(())
+    }
+    fn serial_text(&mut self, text: &str) -> Result<()> {
+        let state = self.emulator.snapshot();
+        if self.serial_focused && state.headless && state.phase == Phase::Running {
+            self.emulator
+                .serial_input(state.serial_input_generation, text.as_bytes())?;
+            self.serial_selection = None;
+        }
+        Ok(())
+    }
+    fn serial_key(&mut self, key: Scancode, keycode: Option<Keycode>, mods: Mod) -> Result<()> {
+        let state = self.emulator.snapshot();
+        if self.serial_focused
+            && state.headless
+            && state.phase == Phase::Running
+            && let Some(bytes) = serial_input::key_bytes(
+                key,
+                keycode,
+                mods,
+                state.serial_screen.application_cursor(),
+            )
+        {
+            self.emulator
+                .serial_input(state.serial_input_generation, &bytes)?;
+            self.serial_selection = None;
+        }
+        Ok(())
+    }
     fn key(
         &mut self,
         key: Scancode,
@@ -526,13 +654,22 @@ impl App {
                 Scancode::Delete => o.detach(),
                 _ => {}
             }
+        } else if ctrl && shift && key == Scancode::C && self.emulator.snapshot().headless {
+            self.copy_console_text(video)?;
+        } else if ctrl && shift && key == Scancode::V {
+            self.paste_clipboard(video)?;
         } else if ctrl && key == Scancode::Return {
-            if self.captured {
+            if self.captured || self.serial_focused {
                 self.release();
-            } else if self.emulator.snapshot().phase == Phase::Running
-                && !self.emulator.snapshot().headless
-            {
-                self.captured = true;
+            } else {
+                let state = self.emulator.snapshot();
+                if state.phase == Phase::Running {
+                    if state.headless {
+                        self.serial_focused = self.settings.show_serial_console;
+                    } else {
+                        self.captured = true;
+                    }
+                }
             }
         } else if ctrl && key == Scancode::P {
             self.release();
@@ -651,6 +788,10 @@ fn run(options: Options) -> Result<()> {
         creation: None,
         held: input::HeldKeys::default(),
         captured: false,
+        serial_focused: false,
+        serial_selection: None,
+        serial_scroll_drag: None,
+        serial_wheel: 0.0,
         quitting: false,
         notice: None,
     };
@@ -708,6 +849,7 @@ fn run(options: Options) -> Result<()> {
     let mut last_error: Option<String> = None;
     let mut last_notice: Option<String> = None;
     let mut last_captured = false;
+    let mut last_serial_focused = false;
     let mut last_serial_status = (None, None, 0);
     let mut last_serial_frame = 0;
     let mut last_shutdown_failed = false;
@@ -738,11 +880,21 @@ fn run(options: Options) -> Result<()> {
                 } => app.release(),
                 Event::KeyDown {
                     scancode: Some(key),
+                    keycode,
                     keymod,
-                    repeat: false,
+                    repeat,
                     ..
                 } if app.picker.is_none() && app.creation.is_none() => {
-                    if let Err(error) = app.key(key, keymod, &video, canvas.window_mut()) {
+                    let result = if app.serial_history_key(key, keymod) {
+                        Ok(())
+                    } else if app.serial_focused && !serial_input::reserved(key, keymod) {
+                        app.serial_key(key, keycode, keymod)
+                    } else if !repeat {
+                        app.key(key, keymod, &video, canvas.window_mut())
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(error) = result {
                         app.notify(error.to_string());
                     }
                 }
@@ -760,6 +912,67 @@ fn run(options: Options) -> Result<()> {
                     if let Some(edit) = app.overlay.as_mut().and_then(|o| o.edit.as_mut()) {
                         let remaining = 4096usize.saturating_sub(edit.len());
                         edit.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
+                    } else if app.confirm.is_none()
+                        && app.overlay.is_none()
+                        && !app.quitting
+                        && let Err(error) = app.serial_text(&text)
+                    {
+                        app.notify(error.to_string());
+                    }
+                }
+                Event::MouseWheel {
+                    y,
+                    direction,
+                    mouse_x,
+                    mouse_y,
+                    ..
+                } if app.serial_controls() => {
+                    let at = view::point(mouse_x, mouse_y, canvas.window().size());
+                    if view::serial_console_rect().contains_point(at)
+                        || view::serial_scroll_rect().contains_point(at)
+                    {
+                        let delta = if direction == sdl3::mouse::MouseWheelDirection::Flipped {
+                            -y
+                        } else {
+                            y
+                        };
+                        if delta.is_finite() {
+                            app.serial_wheel += delta * 3.0;
+                            let rows = app.serial_wheel as i32;
+                            app.serial_wheel -= rows as f32;
+                            if rows != 0 {
+                                app.scroll_serial(serial_screen::Scroll::By(rows));
+                            }
+                        }
+                    }
+                }
+                Event::MouseMotion { x, y, .. }
+                    if app.serial_controls()
+                        && (app.serial_scroll_drag.is_some()
+                            || app.serial_selection.as_ref().is_some_and(|s| s.dragging)) =>
+                {
+                    let (x, y) = view::point(x, y, canvas.window().size());
+                    if let Some(grab) = app.serial_scroll_drag {
+                        let history = app.emulator.snapshot().serial_screen.history;
+                        app.scroll_serial(serial_screen::Scroll::To(view::serial_scroll_offset(
+                            history, y, grab,
+                        )));
+                    } else if let Some(selection) = &mut app.serial_selection {
+                        selection.end = view::serial_cell_at(x, y);
+                    }
+                }
+                Event::MouseButtonUp {
+                    mouse_btn: sdl3::mouse::MouseButton::Left,
+                    ..
+                } if app.serial_scroll_drag.is_some()
+                    || app.serial_selection.as_ref().is_some_and(|s| s.dragging) =>
+                {
+                    app.serial_scroll_drag = None;
+                    if let Some(selection) = &mut app.serial_selection {
+                        selection.dragging = false;
+                    }
+                    if app.serial_selection.as_ref().is_some_and(|s| !s.nonempty()) {
+                        app.serial_selection = None;
                     }
                 }
                 Event::MouseMotion { xrel, yrel, .. } if app.captured => {
@@ -815,11 +1028,45 @@ fn run(options: Options) -> Result<()> {
                                 }
                             }
                         }
-                    } else if view::guest_rect(app.settings.show_status).contains_point((x, y))
-                        && app.emulator.snapshot().phase == Phase::Running
-                        && !app.emulator.snapshot().headless
-                    {
-                        app.captured = true;
+                    } else {
+                        let state = app.emulator.snapshot();
+                        if state.has_machine && state.headless {
+                            app.release();
+                            if state.serial_endpoint.is_some()
+                                && view::serial_copy_rect(app.settings.show_serial_console)
+                                    .contains_point((x, y))
+                            {
+                                if let Err(error) = app.copy_serial_command(&video) {
+                                    app.notify(error.to_string());
+                                }
+                            } else if app.settings.show_serial_console
+                                && view::serial_scroll_rect().contains_point((x, y))
+                            {
+                                let thumb = view::serial_scroll_thumb(
+                                    state.serial_screen.history,
+                                    state.serial_screen.offset,
+                                );
+                                if thumb.contains_point((x, y)) {
+                                    app.serial_scroll_drag = Some(y - thumb.y());
+                                } else {
+                                    app.scroll_serial(serial_screen::Scroll::By(
+                                        if y < thumb.y() { 24 } else { -24 },
+                                    ));
+                                }
+                            } else if app.settings.show_serial_console
+                                && view::serial_console_rect().contains_point((x, y))
+                            {
+                                app.serial_focused = state.phase == Phase::Running;
+                                app.serial_selection = Some(serial_selection::Selection::new(
+                                    state.serial_screen.clone(),
+                                    view::serial_cell_at(x, y),
+                                ));
+                            }
+                        } else if view::guest_rect(app.settings.show_status).contains_point((x, y))
+                            && state.phase == Phase::Running
+                        {
+                            app.captured = true;
+                        }
                     }
                 }
                 _ => {}
@@ -865,7 +1112,7 @@ fn run(options: Options) -> Result<()> {
             redraw = true;
         }
         let text_input = video.text_input();
-        let editing = app.overlay.as_ref().is_some_and(|o| o.edit.is_some());
+        let editing = app.overlay.as_ref().is_some_and(|o| o.edit.is_some()) || app.serial_focused;
         if editing != text_input.is_active(canvas.window()) {
             if editing {
                 text_input.start(canvas.window());
@@ -910,6 +1157,7 @@ fn run(options: Options) -> Result<()> {
             || state.error != last_error
             || state.shutdown_failed != last_shutdown_failed
             || app.captured != last_captured
+            || app.serial_focused != last_serial_focused
         {
             redraw = true;
             last_phase = state.phase;
@@ -919,6 +1167,7 @@ fn run(options: Options) -> Result<()> {
             last_error = state.error.clone();
             last_shutdown_failed = state.shutdown_failed;
             last_captured = app.captured;
+            last_serial_focused = app.serial_focused;
         }
         let mut activity_events = 0;
         if state.phase == Phase::Running && state.steps > last_steps {
@@ -944,7 +1193,12 @@ fn run(options: Options) -> Result<()> {
             app.quitting = false;
             app.notify("NVRAM could not be saved; machine retained. Fix the path/permissions and retry quit.");
         }
-        if (state.phase != Phase::Running || state.headless) && app.captured {
+        if ((state.phase != Phase::Running || state.headless) && app.captured)
+            || (app.serial_focused
+                && (state.phase != Phase::Running
+                    || !state.headless
+                    || !app.settings.show_serial_console))
+        {
             app.release();
         }
         if frame_id != state.frame {
@@ -991,6 +1245,8 @@ fn run(options: Options) -> Result<()> {
                     overlay: app.overlay.as_ref(),
                     confirm: app.confirm,
                     captured: app.captured,
+                    serial_focused: app.serial_focused,
+                    serial_selection: app.serial_selection.as_ref(),
                     leds: leds.lit,
                     notice: app.notice.as_ref().map(|(s, _)| s.as_str()),
                     quitting: app.quitting,

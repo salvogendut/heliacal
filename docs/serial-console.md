@@ -3,8 +3,9 @@
 Heliacal keeps its control window when a guest is headless. The machine has no
 framebuffer or VSIMM; its console uses SCC channel A (TTYA), exposed as a Unix
 PTY. The guest keyboard remains electrically present for original firmware
-startup, but Heliacal does not capture host keyboard/mouse input for a headless
-guest. CPU execution and device time remain in Helios.
+startup. The embedded console sends typed bytes to TTYA, not to the emulated
+Sun keyboard. It does not grab or hide the mouse. CPU execution and device
+time remain in Helios.
 
 1. Enable **F9 > General > Tinker**.
 2. In **Advanced**, turn **Headless guest** on. Optionally enter a **Serial PTY
@@ -17,17 +18,62 @@ guest. CPU execution and device time remain in Helios.
    minicom -o -8 -b 9600 -D /tmp/heliacal-ss20
    ```
 
-**Advanced > Serial console view** shows the serial output inside Heliacal's
+**Advanced > Serial console view** shows the serial console inside Heliacal's
 window. It defaults to **On** and is gated by Tinker. Save applies this view
 preference immediately, without a cold reset. Off returns to the connection
 information panel; the PTY and terminal state keep running while hidden.
 
-The embedded view is an 80-column, 24-row output screen with wrapping,
-scrolling, cursor positioning, erase commands, ANSI colours and underline.
-Use minicom for keyboard input. Both views receive the same original SCC A
-bytes; showing the embedded screen does not consume bytes from the PTY.
-The current ASCII font substitutes `?` for unsupported glyphs. There is no
-scrollback history or terminal-query reply injection from the embedded view.
+The embedded console is an 80-column, 24-row terminal with the original dark
+background and light text, wrapping, cursor positioning, erase commands, ANSI
+colours and underline. Guest-selected colours and inverse video remain supported.
+
+Click inside the console or press **Ctrl+Enter** while the machine is running
+to focus its keyboard input. The border and hint show the focused state.
+Type normally; Enter, Backspace, Tab, Escape, arrow/editing keys and control
+characters go to TTYA. Printable text uses the host keyboard layout and SDL
+text composition; Backspace sends DEL and **Ctrl+H** sends BS. The cursor keys
+respect the guest's normal/application cursor mode. Use `TERM=vt100` for
+terminal-aware guest applications. This is a bounded VT subset, not a complete
+xterm implementation.
+
+**Ctrl+Enter** releases focus. Opening F9, a confirmation dialog, losing host
+window focus, pausing, or hiding the view also releases it and discards queued
+embedded input. A stopped/powered-off guest cannot take input; use confirmed
+**F5** to cold-start it. Existing frontend shortcuts remain reserved, including
+**Ctrl+P** for pause and **F9** for settings; Shift passes reserved function keys
+to the guest. The mouse remains free to operate the frontend.
+
+**Copy command**, beside the connection command, copies the full shell-quoted
+minicom command to the host clipboard. Drag over the console to select text,
+then press **Ctrl+Shift+C** to copy the selection. Without a selection that
+shortcut copies the minicom command, including while the console view is hidden.
+A selection holds its displayed page so new output cannot alter the text being
+copied. **Esc**, scrolling or typing clears it. Copying never sends guest input;
+**Ctrl+C** remains the guest interrupt character.
+
+**Ctrl+Shift+V** pastes clipboard text into the focused console. CRLF and LF
+become Enter, tabs and UTF-8 are preserved, and other control characters are
+filtered. The guest's bracketed-paste mode is honoured. A paste must fit the
+4 KiB input queue (including delimiters); an oversized paste is rejected whole.
+Release focus to discard queued paste. Unmodified **Ctrl+V** still goes to the
+guest, and F9 path editors retain their existing Ctrl+V shortcut.
+
+The scrollbar and mouse wheel browse up to **10,000 saved lines**. Drag the
+thumb or click its track to move by a page. **Shift+PageUp/PageDown** scroll a
+page; **Shift+Home** goes to the oldest retained line and **Shift+End** returns
+to live output. Unmodified PageUp/PageDown are still guest keys. Output follows
+automatically at the bottom; while reading history, new lines keep the viewport
+anchored until those lines age out of the bounded buffer. Typing or pasting
+returns to live output. History is available while paused or stopped, and
+survives hiding the console. A cold reset/replacement starts fresh history.
+Terminal reset/erase-scrollback sequences also clear it; alternate-screen
+applications do not fill the main history with redraws.
+
+The embedded console and minicom both receive the original SCC A output;
+showing the embedded screen does not consume bytes from the PTY. Both can send
+input, so use one input source at a time to avoid interleaved commands.
+The current ASCII font substitutes `?` for unsupported glyphs. Terminal-query
+replies are not injected by the embedded view.
 
 Use **9600 baud, 8 data bits, no parity, 1 stop bit**, with hardware and software
 flow control off. `-o` skips modem initialization. Connect one terminal client
@@ -91,7 +137,11 @@ longer exists; otherwise choose another path or inspect the old link yourself.
 All PTY descriptors close on exec. Non-Unix hosts report an unsupported PTY
 error without replacing the running machine.
 
-Transport uses nonblocking reads/writes and bounded 64 KiB input/output queues.
+PTY transport uses nonblocking reads/writes and bounded 64 KiB input/output queues.
+Embedded input has its own 4 KiB queue; it retries a full SCC without dropping
+bytes and reports overflow instead of accepting a partial text event. Machine
+and receiver resets flush both input sources. Generation checks reject stale
+UI events, and each published prompt carries its matching generation.
 A disconnected or slow reader never blocks emulation. Partial writes retain
 the unsent suffix. If the output queue fills, its oldest bytes are discarded;
 the control window displays the count. The small printable diagnostics view
@@ -150,3 +200,26 @@ retains fractional cycles and shares device time across CPUs. SS-5 OBP reports
 85.0 MHz and SS-20 reports 75 MHz; Axil OBP 2.19 truncates its calibration to
 74 MHz on this 75 MHz timebase. These are functional clocks, without a full
 pipeline or cache timing model.
+
+## Terminal input reference
+
+The normal/application cursor and editing sequences follow the
+[XTerm control-sequence reference](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-PC-Style-Function-Keys).
+The pinned `vt100` parser supplies the application-cursor flag; keyboard input
+and explicit clipboard actions remain separate from terminal-query parsing.
+
+## Pasting into a graphical guest
+
+Capture the SDL guest display, then press **Ctrl+Shift+V**. Heliacal translates
+ASCII text into balanced Sun Type 5 US key presses/releases, so paste works at
+firmware prompts, OS consoles and focused graphical terminal applications.
+It uses the guest's US keyboard mapping; non-ASCII text is rejected before any
+keys are sent. Each paste is limited to 4 KiB. Newlines press Return; tabs press
+Tab. This sends keystrokes, not a guest clipboard transfer.
+
+The worker retries keyboard backpressure; the emulated 1200-baud keyboard
+provides pacing in guest time. Existing held keys are released before paste,
+and physical typing is suppressed while its queue is nonempty to avoid mixing
+modifiers. **Ctrl+Enter**, focus loss, pause or reset cancels queued paste and
+releases synthetic keys. Bytes already delivered to the device cannot be
+recalled. No terminal or firmware memory is patched to inject text.

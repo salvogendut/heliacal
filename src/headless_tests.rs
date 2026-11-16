@@ -204,11 +204,37 @@ fn headless_worker_transports_raw_serial_and_retains_guest_after_alias_collision
         thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(raw, b"HELIOSZ\n");
-    emulator.boot(settings).unwrap();
+    emulator.boot(settings.clone()).unwrap();
     let reset = wait(&|s| s.serial == "HELIOS" && s.error.is_none());
     assert_eq!(reset.serial_screen.contents(), "HELIOS");
     assert!(reset.serial_frame > echoed.serial_frame);
     assert_eq!(fs::read_link(&alias).unwrap(), target); // F5 keeps attached minicom alive.
+    emulator
+        .serial_input(reset.serial_input_generation, b"G")
+        .unwrap();
+    let gui_echoed = wait(&|s| s.serial.ends_with("G\n"));
+    assert_eq!(gui_echoed.serial_screen.contents(), "HELIOSG");
+    raw.clear();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !raw.ends_with(b"G\n") {
+        let mut buf = [0; 256];
+        match client.read(&mut buf) {
+            Ok(n) => raw.extend(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => panic!("{e}"),
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(raw, b"HELIOSG\n"); // Embedded input is echoed to the external PTY too.
+    emulator.boot(settings).unwrap();
+    let new = wait(&|s| s.serial == "HELIOS");
+    assert_ne!(new.serial_input_generation, reset.serial_input_generation);
+    assert!(
+        emulator
+            .serial_input(reset.serial_input_generation, b"stale")
+            .is_err()
+    );
     emulator.shutdown().unwrap();
     wait(&|s| s.phase == Phase::Stopped);
     assert!(fs::symlink_metadata(&alias).is_err());

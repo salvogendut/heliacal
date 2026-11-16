@@ -66,6 +66,8 @@ pub struct Presentation<'a> {
     pub overlay: Option<&'a Overlay>,
     pub confirm: Option<(Confirm, usize)>,
     pub captured: bool,
+    pub serial_focused: bool,
+    pub serial_selection: Option<&'a crate::serial_selection::Selection>,
     pub leds: u64,
     pub notice: Option<&'a str>,
     pub quitting: bool,
@@ -76,13 +78,8 @@ const CONSOLE_FG: Color = Color::RGB(215, 224, 232);
 
 fn terminal_color(color: vt100::Color, default: Color, bright: bool) -> Color {
     match color {
-        vt100::Color::Default => {
-            if bright {
-                Color::RGB(255, 255, 255)
-            } else {
-                default
-            }
-        }
+        vt100::Color::Default if bright => Color::RGB(255, 255, 255),
+        vt100::Color::Default => default,
         vt100::Color::Rgb(r, g, b) => Color::RGB(r, g, b),
         vt100::Color::Idx(mut index) => {
             if bright && index < 8 {
@@ -125,7 +122,8 @@ fn cell_style(cell: &vt100::Cell) -> (Color, Color, bool) {
     let mut fg = terminal_color(cell.fgcolor(), CONSOLE_FG, cell.bold());
     let mut bg = terminal_color(cell.bgcolor(), CONSOLE_BG, false);
     if cell.dim() {
-        fg = Color::RGB(fg.r / 2, fg.g / 2, fg.b / 2);
+        let dim = |a, b| ((u16::from(a) + u16::from(b)) / 2) as u8;
+        fg = Color::RGB(dim(fg.r, bg.r), dim(fg.g, bg.g), dim(fg.b, bg.b));
     }
     if cell.inverse() {
         std::mem::swap(&mut fg, &mut bg);
@@ -133,7 +131,58 @@ fn cell_style(cell: &vt100::Cell) -> (Color, Color, bool) {
     (fg, bg, cell.underline())
 }
 
-fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl3::Error> {
+pub fn serial_console_rect() -> Rect {
+    Rect::new(64, 112, 832, 460)
+}
+
+pub fn serial_scroll_rect() -> Rect {
+    Rect::new(900, 112, 16, 460)
+}
+pub fn serial_scroll_thumb(history: usize, offset: usize) -> Rect {
+    let track = serial_scroll_rect();
+    let height = ((track.height() as usize * 24) / (history + 24)).max(24) as u32;
+    let travel = (track.height() - height) as usize;
+    let y = (travel * (history - offset.min(history)))
+        .checked_div(history)
+        .unwrap_or(0);
+    Rect::new(track.x(), track.y() + y as i32, track.width(), height)
+}
+pub fn serial_scroll_offset(history: usize, y: i32, grab: i32) -> usize {
+    let track = serial_scroll_rect();
+    let travel = (track.height() - serial_scroll_thumb(history, 0).height()) as i32;
+    if travel == 0 {
+        return 0;
+    }
+    let top = (y - grab - track.y()).clamp(0, travel) as usize;
+    history - (history * top / travel as usize)
+}
+pub fn serial_cell_at(x: i32, y: i32) -> (u16, u16) {
+    (
+        ((y - 128).div_euclid(18)).clamp(0, 23) as u16,
+        ((x - 80).div_euclid(10)).clamp(0, 79) as u16,
+    )
+}
+
+pub fn serial_copy_rect(show_console: bool) -> Rect {
+    if show_console {
+        Rect::new(736, 582, 144, 28)
+    } else {
+        Rect::new(700, 360, 164, 30)
+    }
+}
+
+fn draw_copy_command(c: &mut WindowCanvas, show_console: bool) -> Result<(), sdl3::Error> {
+    let rect = serial_copy_rect(show_console);
+    panel(c, rect)?;
+    text(c, rect.x() + 16, rect.y() + 10, "Copy command", TEXT)
+}
+
+fn draw_serial_console(
+    c: &mut WindowCanvas,
+    state: &Snapshot,
+    focused: bool,
+    selection: Option<&crate::serial_selection::Selection>,
+) -> Result<(), sdl3::Error> {
     text(c, 80, 56, "SERIAL CONSOLE / TTYA", ACCENT)?;
     text(
         c,
@@ -142,21 +191,29 @@ fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl
         state.machine_name.as_deref().unwrap_or("Helios"),
         TEXT,
     )?;
-    fill(c, Rect::new(64, 112, 832, 460), CONSOLE_BG)?;
-    c.set_draw_color(BORDER);
-    c.draw_rect(Rect::new(64, 112, 832, 460))?;
+    fill(c, serial_console_rect(), CONSOLE_BG)?;
+    c.set_draw_color(if focused { ACCENT } else { BORDER });
+    c.draw_rect(serial_console_rect())?;
     // 80x24 at 10x18 pixels. Group equal attributes to avoid one SDL text
     // operation per character. The UI uses its existing ASCII glyph font.
-    let screen = &state.serial_screen;
+    let screen = selection.map_or(state.serial_screen.as_ref(), |s| s.screen.as_ref());
+    let style_at = |row, col| {
+        let mut style = cell_style(screen.cell(row, col).unwrap());
+        if selection.is_some_and(|s| s.contains(row, col)) {
+            style.0 = Color::RGB(255, 255, 255);
+            style.1 = Color::RGB(49, 82, 130);
+        }
+        style
+    };
     for row in 0..24 {
         let mut col = 0;
         while col < 80 {
             let start = col;
-            let style = cell_style(screen.cell(row, col).unwrap());
+            let style = style_at(row, col);
             let mut run = String::new();
             while col < 80 {
                 let cell = screen.cell(row, col).unwrap();
-                if cell_style(cell) != style {
+                if style_at(row, col) != style {
                     break;
                 }
                 run.push(if !cell.has_contents() || cell.is_wide_continuation() {
@@ -187,7 +244,7 @@ fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl
             }
         }
     }
-    if !screen.hide_cursor() {
+    if !screen.hide_cursor() && !selection.is_some_and(|s| s.nonempty()) {
         let (row, col) = screen.cursor_position();
         fill(
             c,
@@ -197,17 +254,39 @@ fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl
                 10,
                 2,
             ),
-            CONSOLE_FG,
+            cell_style(screen.cell(row.min(23), col.min(79)).unwrap()).0,
         )?;
     }
-    text(
+    fill(c, serial_scroll_rect(), PANEL)?;
+    fill(
         c,
-        80,
-        594,
-        "Output view / connect via minicom to type:",
-        MUTED,
+        serial_scroll_thumb(screen.history, screen.offset),
+        if screen.history == 0 { MUTED } else { BORDER },
     )?;
+    let position = if selection.is_some_and(|s| s.nonempty()) {
+        "Selection held / Ctrl+Shift+C copies / Esc clears".to_string()
+    } else if screen.offset == 0 {
+        format!(
+            "LIVE / {} saved lines / wheel or Shift+PageUp to scroll",
+            screen.history
+        )
+    } else {
+        format!(
+            "{} lines above live / Shift+End returns to latest output",
+            screen.offset
+        )
+    };
+    text(c, 80, 100, &position, MUTED)?;
+    let hint = match state.phase {
+        Phase::Running if focused => "Typing to TTYA / Ctrl+Enter releases focus",
+        Phase::Running => "Click console or Ctrl+Enter to type",
+        Phase::Paused => "Paused / Ctrl+P resumes the guest",
+        Phase::Stopped | Phase::Failed => "Guest stopped / F5 cold reset starts it again",
+        _ => "Console input is available while the guest is running",
+    };
+    text(c, 80, 594, hint, MUTED)?;
     if let Some(endpoint) = &state.serial_endpoint {
+        draw_copy_command(c, true)?;
         let chars: Vec<_> = crate::terminal::recipe(endpoint).chars().collect();
         for (i, line) in chars.chunks(100).take(3).enumerate() {
             text(
@@ -243,7 +322,7 @@ fn draw_serial_console(c: &mut WindowCanvas, state: &Snapshot) -> Result<(), sdl
             c,
             80,
             686,
-            "F9 > Advanced > Serial console view toggles this screen",
+            "Drag to select / Ctrl+Shift+C copy / Ctrl+Shift+V paste",
             MUTED,
         )?;
     }
@@ -261,7 +340,7 @@ pub fn draw(
     c.set_blend_mode(BlendMode::Blend);
     let destination = guest_rect(p.settings.show_status);
     if p.state.has_machine && p.state.headless && p.settings.show_serial_console {
-        draw_serial_console(c, p.state)?;
+        draw_serial_console(c, p.state, p.serial_focused, p.serial_selection)?;
     } else if p.state.has_machine && p.state.headless {
         text(c, 144, 200, "HEADLESS WORKSTATION / SERIAL TTYA", ACCENT)?;
         text(
@@ -280,7 +359,7 @@ pub fn draw(
         )?;
         if let Some(endpoint) = &p.state.serial_endpoint {
             let recipe = crate::terminal::recipe(endpoint);
-            for (i, line) in recipe.as_bytes().chunks(82).enumerate() {
+            for (i, line) in recipe.as_bytes().chunks(82).take(2).enumerate() {
                 text(
                     c,
                     144,
@@ -289,6 +368,9 @@ pub fn draw(
                     TEXT,
                 )?;
             }
+        }
+        if p.state.serial_endpoint.is_some() {
+            draw_copy_command(c, false)?;
         }
         text(
             c,
@@ -537,7 +619,7 @@ fn draw_hints(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Er
                 .unwrap_or_else(|| p.settings.machine_description())
         )
     };
-    let keys = if p.captured {
+    let keys = if p.captured || p.serial_focused {
         "  Ctrl+Enter=release  Ctrl+P=pause  F4=shot  F5=reset  F9=options  F12=quit"
     } else {
         "  Ctrl+P=boot/pause  F4=shot  F5=reset  F9=options  F11=full  F12=quit"
@@ -880,7 +962,7 @@ fn draw_overlay(
         } else if o.field() == Field::Ram {
             "Enter cycles valid memory sizes for this model and display."
         } else if o.field() == Field::SerialConsole {
-            "Show/hide in-window serial output. Save applies immediately; PTY stays available."
+            "Show/hide the serial console. Save applies immediately; PTY stays available."
         } else if o.field() == Field::AccurateClocks {
             "Off: faster boots. On: nominal MHz, slower timer waits. Save, then F5."
         } else if o.tab == Tab::Advanced {
@@ -915,4 +997,48 @@ pub fn point(x: f32, y: f32, window: (u32, u32)) -> (i32, i32) {
         ((x - (window.0 as f32 - WIDTH as f32 * scale) / 2.0) / scale) as i32,
         ((y - (window.1 as f32 - HEIGHT as f32 * scale) / 2.0) / scale) as i32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_console_keeps_bold_inverse_dim_and_explicit_colors_readable() {
+        let mut parser = vt100::Parser::default();
+        parser.process(b"\x1b[1mB\x1b[0;7mI\x1b[0;2mD\x1b[0;31;44mC");
+        let screen = parser.screen();
+        assert_eq!(
+            cell_style(screen.cell(0, 0).unwrap()),
+            (Color::RGB(255, 255, 255), Color::RGB(8, 12, 18), false)
+        );
+        assert_eq!(
+            cell_style(screen.cell(0, 1).unwrap()),
+            (Color::RGB(8, 12, 18), Color::RGB(215, 224, 232), false)
+        );
+        assert_eq!(
+            cell_style(screen.cell(0, 2).unwrap()).0,
+            Color::RGB(111, 118, 125)
+        );
+        assert_eq!(
+            cell_style(screen.cell(0, 3).unwrap()),
+            (Color::RGB(170, 0, 0), Color::RGB(0, 0, 170), false)
+        );
+    }
+    #[test]
+    fn scroll_thumb_and_drag_reach_both_ends_without_covering_text() {
+        let track = serial_scroll_rect();
+        assert_eq!(serial_scroll_thumb(0, 0), track);
+        for history in [1, 24, 77, 10_000] {
+            let top = serial_scroll_thumb(history, history);
+            let bottom = serial_scroll_thumb(history, 0);
+            assert_eq!(top.y(), track.y());
+            assert_eq!(bottom.bottom(), track.bottom());
+            assert_eq!(serial_scroll_offset(history, top.y() + 5, 5), history);
+            assert_eq!(serial_scroll_offset(history, bottom.y() + 5, 5), 0);
+        }
+        assert!(track.x() >= serial_console_rect().right());
+        assert_eq!(serial_cell_at(-100, -100), (0, 0));
+        assert_eq!(serial_cell_at(5000, 5000), (23, 79));
+    }
 }

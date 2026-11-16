@@ -58,8 +58,9 @@ pub struct Snapshot {
     /// Scheduler outcomes by populated module (hardware processors 0 and 2).
     pub processor_steps: [u64; 2],
     pub serial: String,
-    pub serial_screen: Arc<vt100::Screen>,
+    pub serial_screen: Arc<crate::serial_screen::SerialFrame>,
     pub serial_frame: u64,
+    pub serial_input_generation: u64,
     pub headless: bool,
     pub serial_endpoint: Option<String>,
     pub serial_error: Option<String>,
@@ -87,8 +88,11 @@ impl Default for Snapshot {
             secondary_pc: None,
             processor_steps: [0; 2],
             serial: String::new(),
-            serial_screen: Arc::new(vt100::Parser::default().screen().clone()),
+            serial_screen: crate::serial_screen::SerialScreen::default()
+                .publish()
+                .unwrap(),
             serial_frame: 0,
+            serial_input_generation: 0,
             headless: false,
             serial_endpoint: None,
             serial_error: None,
@@ -121,6 +125,9 @@ enum MouseEvent {
 
 #[derive(Default)]
 struct Input {
+    serial: crate::serial_input::SerialInput,
+    scroll: Option<(u64, crate::serial_screen::Scroll)>,
+    paste: VecDeque<(u8, bool)>,
     queue: VecDeque<(u8, bool)>,
     mouse: VecDeque<MouseEvent>,
     mouse_buttons: u8,
@@ -188,6 +195,11 @@ impl Emulator {
     }
     pub fn key(&self, code: u8, down: bool) -> bool {
         let mut input = self.input.lock().unwrap();
+        // Do not interleave physical typing with synthetic paste modifiers.
+        // Frontend shortcuts (release, pause, reset) still cancel the paste.
+        if !input.paste.is_empty() {
+            return true;
+        }
         if input.queue.len() >= 256 {
             input.queue.clear();
             input.release = true;
@@ -196,9 +208,42 @@ impl Emulator {
         input.queue.push_back((code, down));
         true
     }
+    pub fn serial_input(&self, generation: u64, bytes: &[u8]) -> Result<(), String> {
+        let mut input = self.input.lock().unwrap();
+        input.serial.push(generation, bytes)?;
+        input.scroll = Some((generation, crate::serial_screen::Scroll::To(0)));
+        Ok(())
+    }
+    pub fn paste_keys(&self, generation: u64, keys: VecDeque<(u8, bool)>) -> Result<(), String> {
+        let mut input = self.input.lock().unwrap();
+        if generation != input.serial.generation() {
+            return Err("Machine changed; paste was not sent.".into());
+        }
+        if keys.len() > 4 * 4096 || !input.paste.is_empty() {
+            return Err("Keyboard paste queue is full; release input to cancel.".into());
+        }
+        // Release held guest modifiers before accepting the new text, but
+        // never cancel an in-progress paste just because another was requested.
+        input.queue.clear();
+        input.release = true;
+        input.paste = keys;
+        Ok(())
+    }
+    pub fn scroll_serial(&self, generation: u64, scroll: crate::serial_screen::Scroll) {
+        let mut input = self.input.lock().unwrap();
+        if generation == input.serial.generation() {
+            let next = match input.scroll {
+                Some((old_generation, old)) if old_generation == generation => old.then(scroll),
+                _ => scroll,
+            };
+            input.scroll = Some((generation, next));
+        }
+    }
     pub fn release_keys(&self) {
         let mut input = self.input.lock().unwrap();
         input.queue.clear();
+        input.serial.clear();
+        input.paste.clear();
         input.mouse.clear();
         for button in 0..3 {
             if input.mouse_buttons & (1 << (2 - button)) != 0 {
@@ -526,19 +571,48 @@ struct SerialBridge {
     break_until_step: u64,
 }
 impl SerialBridge {
-    fn service(&mut self, machine: &mut Machine, running: bool, state: &mut Snapshot) {
+    fn sync_input(
+        &mut self,
+        machine: &Machine,
+        running: bool,
+        state: &mut Snapshot,
+        keys: &mut Input,
+    ) {
+        keys.serial.enable(running && self.pty.is_some());
         let Some(pty) = &mut self.pty else {
             return;
         };
-        let serial = &mut machine.bus.devices_mut().unwrap().serial;
-        let epoch = serial.receiver_epoch(Channel::A);
+        let epoch = machine
+            .bus
+            .devices()
+            .unwrap()
+            .serial
+            .receiver_epoch(Channel::A);
         if epoch != self.epoch {
             // A receiver reset discards input belonging to the previous session.
             pty.clear_input();
+            keys.serial.reset();
             self.epoch = epoch;
             self.break_active = false;
             self.break_pending = false;
         }
+        state.serial_input_generation = keys.serial.generation();
+    }
+
+    fn service(
+        &mut self,
+        machine: &mut Machine,
+        running: bool,
+        state: &mut Snapshot,
+        input: &Mutex<Input>,
+    ) {
+        if self.pty.is_none() {
+            return;
+        }
+        let mut keys = input.lock().unwrap();
+        self.sync_input(machine, running, state, &mut keys);
+        let pty = self.pty.as_mut().unwrap();
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
         if let Err(error) = pty.poll() {
             state.serial_error = Some(error);
         }
@@ -570,10 +644,17 @@ impl SerialBridge {
                 }
                 Err(e) => state.serial_error = Some(format!("Serial BREAK: {e:?}")),
             }
-        } else if let Some(&byte) = pty.input.front()
-            && serial.receive(Channel::A, byte)
-        {
-            pty.input.pop_front();
+        } else {
+            let gui = keys.serial.front();
+            if let Some(byte) = gui.or_else(|| pty.input.front().copied())
+                && serial.receive(Channel::A, byte)
+            {
+                if gui.is_some() {
+                    keys.serial.consume();
+                } else {
+                    pty.input.pop_front();
+                }
+            }
         }
     }
 }
@@ -727,6 +808,11 @@ fn run(
                             pending_keys.clear();
                             pending_mouse.clear();
                             let mut keys = input.lock().unwrap();
+                            keys.serial.reset();
+                            keys.scroll = None;
+                            keys.paste.clear();
+                            keys.serial.enable(settings.headless);
+                            state.serial_input_generation = keys.serial.generation();
                             keys.queue.clear();
                             keys.mouse.clear();
                             keys.mouse_buttons = 0;
@@ -746,8 +832,20 @@ fn run(
             }
         }
         if let Some(m) = machine.as_mut() {
-            serial.service(m, state.phase == Phase::Running, &mut state);
-            if state.phase != Phase::Running {
+            serial.service(m, state.phase == Phase::Running, &mut state, &input);
+            let scroll = if state.headless {
+                let mut keys = input.lock().unwrap();
+                keys.scroll
+                    .take()
+                    .filter(|(generation, _)| *generation == keys.serial.generation())
+            } else {
+                None
+            };
+            if let Some((_, request)) = scroll
+                && frame_cache.console.scroll(request)
+            {
+                publish(m, &mut state, &shared, &mut frame_cache);
+            } else if state.phase != Phase::Running {
                 *shared.lock().unwrap() = state.clone();
             }
         }
@@ -767,6 +865,14 @@ fn run(
             } else {
                 pending_keys.append(&mut keys.queue);
                 pending_mouse.append(&mut keys.mouse);
+            }
+            // At most one paste event enters the pending queue per batch. The
+            // real keyboard FIFO/1200-baud device provides guest-time pacing;
+            // retry backpressure, and publish releases before new paste keys.
+            if pending_keys.is_empty()
+                && let Some(event) = keys.paste.pop_front()
+            {
+                pending_keys.push_back(event);
             }
         }
         while let Some(event) = pending_mouse.pop_front() {
@@ -828,6 +934,16 @@ fn run(
             state.serial.drain(..state.serial.len() - 8192);
         }
         if frame_at.elapsed() >= Duration::from_millis(33) || state.phase != Phase::Running {
+            if serial.pty.is_some() {
+                // A guest can reinitialize the receiver inside this CPU batch.
+                // Publish the matching input generation with its new prompt.
+                serial.sync_input(
+                    m,
+                    state.phase == Phase::Running,
+                    &mut state,
+                    &mut input.lock().unwrap(),
+                );
+            }
             publish(m, &mut state, &shared, &mut frame_cache);
             frame_at = Instant::now();
         }
@@ -1119,25 +1235,26 @@ mod tests {
             ..SerialBridge::default()
         };
         let mut state = Snapshot::default();
-        bridge.service(&mut machine, false, &mut state);
+        let input = Mutex::new(Input::default());
+        bridge.service(&mut machine, false, &mut state, &input);
         assert!(!bridge.break_active); // Paused commands do not mutate the SCC.
-        bridge.service(&mut machine, true, &mut state);
+        bridge.service(&mut machine, true, &mut state, &input);
         assert!(bridge.break_active);
         state.steps = 999_999;
-        bridge.service(&mut machine, true, &mut state);
+        bridge.service(&mut machine, true, &mut state, &input);
         assert_ne!(
             machine.bus.devices_mut().unwrap().serial.read(4).unwrap() & 0x80,
             0
         );
         state.steps = 1_000_000;
-        bridge.service(&mut machine, true, &mut state);
+        bridge.service(&mut machine, true, &mut state, &input);
         assert!(bridge.break_active); // NUL termination cannot overrun the full FIFO.
         assert!(state.serial_error.is_none());
         assert_eq!(
             machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
             1
         );
-        bridge.service(&mut machine, true, &mut state);
+        bridge.service(&mut machine, true, &mut state, &input);
         assert!(!bridge.break_active);
         for expected in [2, 3, 0] {
             assert_eq!(
@@ -1149,9 +1266,95 @@ mod tests {
         let serial = &mut machine.bus.devices_mut().unwrap().serial;
         serial.write(4, 3).unwrap();
         serial.write(4, 0xc1).unwrap();
-        bridge.service(&mut machine, false, &mut state);
+        bridge.service(&mut machine, false, &mut state, &input);
         assert!(bridge.pty.as_ref().unwrap().input.is_empty());
     }
+    #[cfg(unix)]
+    #[test]
+    fn embedded_serial_input_retries_ttya_and_flushes_on_receiver_reset() {
+        let mut machine = Machine::ss5(8 << 20, &[0; 4]).unwrap();
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        serial.write(4, 4).unwrap();
+        serial.write(4, 0x44).unwrap();
+        serial.write(4, 3).unwrap();
+        serial.write(4, 0xc1).unwrap();
+        for byte in [1, 2, 3] {
+            assert!(serial.receive(Channel::A, byte));
+        }
+        let mut bridge = SerialBridge {
+            pty: Some(SerialPty::open("").unwrap()),
+            epoch: serial.receiver_epoch(Channel::A),
+            ..SerialBridge::default()
+        };
+        let input = Mutex::new(Input::default());
+        input.lock().unwrap().serial.enable(true);
+        input.lock().unwrap().serial.push(0, b"xy").unwrap();
+        let mut state = Snapshot::default();
+        bridge.service(&mut machine, true, &mut state, &input);
+        assert_eq!(input.lock().unwrap().serial.front(), Some(b'x')); // Full SCC, no byte lost.
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(0).unwrap() & 1,
+            0
+        ); // TTYB untouched.
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+            1
+        );
+        bridge.service(&mut machine, true, &mut state, &input);
+        for byte in [2, 3, b'x'] {
+            assert_eq!(
+                machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+                byte
+            );
+        }
+        bridge.service(&mut machine, true, &mut state, &input);
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+            b'y'
+        );
+        input
+            .lock()
+            .unwrap()
+            .serial
+            .push(0, b"old UI command")
+            .unwrap();
+        bridge
+            .pty
+            .as_mut()
+            .unwrap()
+            .input
+            .extend(b"old PTY command");
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        serial.write(4, 3).unwrap();
+        serial.write(4, 0xc1).unwrap();
+        bridge.service(&mut machine, false, &mut state, &input);
+        assert_ne!(state.serial_input_generation, 0);
+        assert!(input.lock().unwrap().serial.front().is_none());
+        assert!(bridge.pty.as_ref().unwrap().input.is_empty());
+        bridge.service(&mut machine, true, &mut state, &input);
+        assert!(
+            input
+                .lock()
+                .unwrap()
+                .serial
+                .push(0, b"late UI command")
+                .is_err()
+        );
+        bridge.pty.as_mut().unwrap().input.push_back(b'p');
+        bridge.service(&mut machine, false, &mut state, &input);
+        assert_eq!(bridge.pty.as_ref().unwrap().input.front(), Some(&b'p'));
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(4).unwrap() & 1,
+            0
+        );
+        bridge.service(&mut machine, true, &mut state, &input);
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+            b'p'
+        );
+        assert_eq!(state.steps, 0); // Transport never advances guest time.
+    }
+
     #[test]
     fn headless_profiles_allocate_no_framebuffer_or_vsimm_and_keep_keyboard_presence() {
         let dir = tempfile::tempdir().unwrap();
@@ -1592,5 +1795,77 @@ mod tests {
         emu.shutdown().unwrap();
         assert!(wait(&emu, |s| s.phase == Phase::Stopped).error.is_none());
         assert_eq!(fs::read(state).unwrap().len(), 8192);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn worker_scrolls_while_paused_without_steps_and_cold_reset_clears_history() {
+        use crate::serial_screen::Scroll;
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        let mut image = helios::machine::serial_demo_image();
+        // Replace the demo's final BA,a self-loop (word 54) with BA,a back
+        // nine words to its receive poll, so every input byte gets echoed.
+        assert_eq!(&image[216..220], &0x30800000u32.to_be_bytes());
+        image[216..220].copy_from_slice(&0x30bffff7u32.to_be_bytes());
+        fs::write(&prom, image).unwrap();
+        let settings = Settings {
+            prom: prom.display().to_string(),
+            headless: true,
+            network: false,
+            ..Settings::default()
+        };
+        let emu = Emulator::new(dir.path().join("nvram")).unwrap();
+        let wait = |predicate: &dyn Fn(&Snapshot) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let state = emu.snapshot();
+                if predicate(&state) {
+                    break state;
+                }
+                assert!(Instant::now() < deadline, "timeout {:?}", state.error);
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        emu.boot(settings.clone()).unwrap();
+        let start = wait(&|s| s.serial == "HELIOS");
+        emu.serial_input(start.serial_input_generation, &[b'Q'; 60])
+            .unwrap();
+        wait(&|s| s.serial.matches("Q\n").count() == 60);
+        emu.pause().unwrap();
+        let paused = wait(&|s| s.phase == Phase::Paused);
+        assert!(paused.serial_screen.history > 30);
+        emu.scroll_serial(paused.serial_input_generation, Scroll::By(24));
+        let history = wait(&|s| s.serial_screen.offset == 24);
+        assert_eq!(history.steps, paused.steps);
+        emu.scroll_serial(paused.serial_input_generation, Scroll::To(0));
+        assert_eq!(wait(&|s| s.serial_screen.offset == 0).steps, paused.steps);
+        emu.boot(settings).unwrap();
+        let reset = wait(&|s| {
+            s.serial == "HELIOS" && s.serial_input_generation != start.serial_input_generation
+        });
+        emu.scroll_serial(start.serial_input_generation, Scroll::By(24));
+        thread::sleep(Duration::from_millis(40));
+        assert_eq!(reset.serial_screen.history, 0);
+        assert_eq!(emu.snapshot().serial_screen.offset, 0);
+        emu.shutdown().unwrap();
+    }
+    #[test]
+    fn keyboard_paste_queue_is_bounded_generation_checked_and_cancelled_on_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let emu = Emulator::new(dir.path().join("nvram")).unwrap();
+        assert!(emu.paste_keys(1, [(0x4d, true)].into()).is_err());
+        assert!(emu.paste_keys(0, vec![(0x4d, true); 16385].into()).is_err());
+        emu.paste_keys(0, crate::input::paste_events("hello").unwrap())
+            .unwrap();
+        assert!(
+            emu.paste_keys(0, crate::input::paste_events("second").unwrap())
+                .is_err()
+        );
+        assert_eq!(emu.input.lock().unwrap().paste.len(), 10);
+        assert!(emu.key(0x4c, true)); // Ignored during paste, no modifier interleave.
+        assert!(emu.input.lock().unwrap().queue.is_empty());
+        emu.release_keys();
+        assert!(emu.input.lock().unwrap().paste.is_empty());
+        emu.shutdown().unwrap();
     }
 }

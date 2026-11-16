@@ -132,6 +132,76 @@ impl HeldKeys {
     }
 }
 
+/// Graphical consoles receive physical key presses, never serial text. The
+/// emulated keyboard advertises the US layout (0x21); reject characters it
+/// cannot produce before enqueueing any part of a paste.
+pub fn paste_events(text: &str) -> Result<std::collections::VecDeque<(u8, bool)>, String> {
+    let bytes = crate::serial_input::paste_bytes(text, false)?;
+    if !bytes.is_ascii() {
+        return Err("Graphical paste supports ASCII with the guest US keyboard layout.".into());
+    }
+    use Scancode::*;
+    let letters = [
+        Q, W, E, R, T, Y, U, I, O, P, A, S, D, F, G, H, J, K, L, Z, X, C, V, B, N, M,
+    ];
+    let symbols = [
+        Grave,
+        _1,
+        _2,
+        _3,
+        _4,
+        _5,
+        _6,
+        _7,
+        _8,
+        _9,
+        _0,
+        Minus,
+        Equals,
+        LeftBracket,
+        RightBracket,
+        Backslash,
+        Semicolon,
+        Apostrophe,
+        Comma,
+        Period,
+        Slash,
+    ];
+    let mut events = std::collections::VecDeque::new();
+    for byte in bytes {
+        let (key, shift) = if byte.is_ascii_alphabetic() {
+            let index = b"qwertyuiopasdfghjklzxcvbnm"
+                .iter()
+                .position(|b| *b == byte.to_ascii_lowercase())
+                .unwrap();
+            (letters[index], byte.is_ascii_uppercase())
+        } else if let Some(index) = b"`1234567890-=[]\\;',./".iter().position(|b| *b == byte) {
+            (symbols[index], false)
+        } else if let Some(index) = b"~!@#$%^&*()_+{}|:\"<>?".iter().position(|b| *b == byte) {
+            (symbols[index], true)
+        } else {
+            (
+                match byte {
+                    b' ' => Space,
+                    b'\t' => Tab,
+                    b'\r' => Return,
+                    _ => return Err("Unsupported graphical paste character.".into()),
+                },
+                false,
+            )
+        };
+        if shift {
+            events.push_back((0x63, true));
+        }
+        let code = station(key).unwrap();
+        events.extend([(code, true), (code, false)]);
+        if shift {
+            events.push_back((0x63, false));
+        }
+    }
+    Ok(events)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +221,35 @@ mod tests {
         assert_eq!(keys.event(Scancode::A, true), None);
         keys.clear();
         assert_eq!(keys.event(Scancode::A, false), None);
+    }
+    #[test]
+    fn graphical_paste_generates_balanced_sun_us_keys_and_rejects_unsupported_text() {
+        let events = paste_events("A!a\r\n").unwrap();
+        assert_eq!(
+            events.into_iter().collect::<Vec<_>>(),
+            vec![
+                (0x63, true),
+                (0x4d, true),
+                (0x4d, false),
+                (0x63, false),
+                (0x63, true),
+                (0x1e, true),
+                (0x1e, false),
+                (0x63, false),
+                (0x4d, true),
+                (0x4d, false),
+                (0x59, true),
+                (0x59, false),
+            ]
+        );
+        let printable = (32..=126).map(char::from).collect::<String>();
+        let mut held = [false; 128];
+        for (key, down) in paste_events(&printable).unwrap() {
+            assert_ne!(held[key as usize], down);
+            held[key as usize] = down;
+        }
+        assert!(!held.iter().any(|v| *v));
+        assert!(paste_events("aé").is_err());
+        assert!(paste_events(&"x".repeat(4097)).is_err());
     }
 }

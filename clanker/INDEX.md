@@ -1,5 +1,7 @@
 # Agent notes
 
+- [Interactive headless console](gui-serial-console.md) — focused TTYA typing, bounded scrollback and selection, dark rendering, serial/graphical clipboard paste, and NetBSD SDL acceptance.
+
 - [Automatic OpenBIOS fallback](openbios-fallback.md) — shared selection, separate NVRAM, original-OBP regressions, graphical/PTY input acceptance, and startup notice, native-search firmware speedup and validated empty-PROM CLI override.
 
 - [External IPv4 ping](icmp-echo.md) — Linux echo relay integration, host diagnostics, final release tests and guest configuration findings.
