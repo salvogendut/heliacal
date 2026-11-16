@@ -256,6 +256,18 @@ fn read_rom(path: &str, label: &str, max: usize) -> Result<Vec<u8>, String> {
 }
 
 fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
+    let unix_seconds = if settings.rtc_host_time {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Host RTC time: {e}"))?
+            .as_secs()
+    } else {
+        0
+    };
+    build_at(settings, nvram, unix_seconds)
+}
+
+fn build_at(settings: &Settings, nvram: Nvram, unix_seconds: u64) -> Result<Machine, String> {
     settings.validate()?;
     let profile = settings.model.profile();
     let prom = read_rom(
@@ -263,7 +275,12 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
         settings.model.prom_label(),
         helios::machine::MAX_PROM_BYTES,
     )?;
-    let nvram = crate::obp_console::select(settings.model, &prom, nvram, settings.headless)?;
+    let mut nvram = crate::obp_console::select(settings.model, &prom, nvram, settings.headless)?;
+    if settings.rtc_host_time {
+        nvram
+            .initialize_sun_clock(unix_seconds)
+            .map_err(|e| format!("RTC startup: {e}"))?;
+    }
     let graphics = if settings.headless {
         None
     } else {
@@ -970,6 +987,44 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn worker_rtc_startup_seeds_each_profile_or_preserves_saved_clock() {
+        use helios::devices::nvram::CLOCK_CONTROL;
+        let dir = tempfile::tempdir().unwrap();
+        let prom = dir.path().join("prom");
+        fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
+        for model in Model::ALL {
+            for rtc_host_time in [false, true] {
+                let settings = Settings {
+                    model,
+                    headless: true,
+                    ram_mib: 16,
+                    rtc_host_time,
+                    prom: prom.display().to_string(),
+                    ..Settings::default()
+                };
+                let mut nvram = model.default_nvram();
+                nvram.write(0x120, 0xa5).unwrap();
+                let saved = nvram.image();
+                let machine =
+                    build_at(&settings, Nvram::from_image(&saved).unwrap(), 1_794_832_496).unwrap();
+                let image = machine.bus.devices().unwrap().nvram.image();
+                assert_eq!(image[0x120], 0xa5);
+                assert_eq!(&image[0x1fd8..0x1fe8], &saved[0x1fd8..0x1fe8]);
+                if rtc_host_time {
+                    assert_eq!(
+                        &image[CLOCK_CONTROL..],
+                        &[0, 0x56, 0x34, 0x12, 2, 0x16, 0x11, 0x58]
+                    );
+                    assert!(build_at(&settings, model.default_nvram(), u64::MAX).is_err());
+                } else {
+                    assert_eq!(&image[CLOCK_CONTROL..], &saved[CLOCK_CONTROL..]);
+                    assert!(build_at(&settings, model.default_nvram(), u64::MAX).is_ok());
+                }
+            }
+        }
+    }
+
     #[test]
     fn worker_build_applies_both_clock_modes_to_each_profile() {
         use crate::settings::Model;

@@ -22,6 +22,16 @@ state and loads the incoming label's file. The published machine name and
 hardware summary change only after successful construction, so saving a
 different selection does not relabel a guest that is still running.
 
+RTC startup is a frontend policy. `rtc_host_time` defaults true in flat and
+named records. The worker samples host UTC once at construction, then calls
+`Nvram::initialize_sun_clock` on the prospective machine's private NVRAM copy.
+Only RTC registers change; guest configuration and IDPROM survive. Failed
+replacement cannot change the old clock. Saved-time mode does not read the host
+clock. The setting participates in cold-replacement detection, but not NVRAM
+identity. Core advancement, guest reset and pause/resume never resynchronize
+from host time; UI refresh and the CPU-rate option remain independent.
+
+
 The worker uses `Machine::step` for one CPU and `Machine::step_scheduled` for
 an explicitly selected two-CPU machine. The topology fixes that choice until
 cold replacement; it never mixes the two execution APIs on a running guest.
