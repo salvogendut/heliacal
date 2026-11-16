@@ -109,6 +109,10 @@ fn app(settings: Settings, config: PathBuf) -> App {
         creation: None,
         held: input::HeldKeys::default(),
         captured: false,
+        serial_focused: false,
+        serial_selection: None,
+        serial_scroll_drag: None,
+        serial_wheel: 0.0,
         quitting: false,
         notice: None,
     }

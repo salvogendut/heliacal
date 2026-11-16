@@ -138,14 +138,48 @@ failed replacement retains the old machine and PTY. `terminal.rs` runs only
 on an explicit Advanced action and uses argument vectors, never a shell.
 
 `serial_screen.rs` feeds the same raw SCC bytes into the pinned `vt100` parser
-on the worker, independent of visibility. Its 80x24 screen has no scrollback;
+on the worker, independent of visibility. Its viewport remains 80x24;
 the parser's default features are disabled to bound VTE OSC storage to 1024
 bytes. Changed immutable screen snapshots are published with normal status
 updates, at most roughly 30 times per second. SDL redraws the embedded view
 when its generation changes and groups adjacent cells with matching attributes.
-The renderer supports ANSI colours, underline and a static cursor using the
-existing ASCII glyph font. Terminal callbacks remain inert: the view sends no
-replies, keyboard input, clipboard operations or resize requests to the guest.
+The renderer uses the original dark background/light text and preserves explicit
+ANSI colours, inverse video, underline and a static cursor using the existing
+ASCII font. Terminal callbacks remain inert: the parser injects no query replies, clipboard data or resize
+requests.
+
+`serial_input.rs` encodes non-text keys and owns a bounded 4 KiB queue. SDL
+TextInput supplies printable UTF-8, preserving host layouts and composition;
+keydown handles controls/editing keys without duplicating printable input.
+The worker retries TTYA RX backpressure without consuming the queued byte.
+Input generations change on cold replacement and SCC receiver reset, flush
+pending bytes, and are synchronized with published output. This prevents a
+new prompt from being paired with the previous input generation. Focus loss,
+UI overlays and pause clear only embedded input; the PTY retains its existing
+pause/reconnect behavior. No input data advances device time.
+
+Console keyboard focus is separate from graphical keyboard/mouse capture.
+The mouse stays ungrabbed, and Ctrl+Enter releases focus. The explicit copy
+button uses `terminal::recipe`; Ctrl+Shift+C copies selected text or falls back
+to that command. Ctrl+C remains a guest byte. Explicit Ctrl+Shift+V pastes into
+the focused console using bounded, newline-normalized UTF-8 and the current
+bracketed-paste mode. Terminal-query parsing never accesses the clipboard.
+
+The parser retains up to 10,000 rows of history on the worker. `SerialFrame`
+contains only the visible 80x24 cells, wrap flags, cursor/input modes and
+history counts; publication does not clone the history. Scroll requests are
+coalesced in one generation-tagged input slot and also serviced while paused
+or stopped, without stepping the machine. The parser anchors an offset view
+as new lines arrive. UI selection owns one immutable viewport until cleared,
+so copied text cannot change under a drag. Only the displayed page is selected.
+
+Graphical paste uses a separate bounded queue of Sun key events. ASCII is
+validated/mapped before enqueueing; keyboard releases precede paste. At most
+one paste event enters the pending queue per CPU batch, and a full hardware
+keyboard FIFO retries without losing the event. The device supplies normal
+1200-baud timing. Focus release/pause/replacement cancels paste and schedules
+releases for pressed keys. Input generations prevent stale paste after a cold
+replacement; physical typing cannot interleave with a nonempty paste queue.
 
 The global `show_serial_console` preference is Tinker-gated in Advanced and
 applies on Save; it is excluded from hardware replacement and named-machine
