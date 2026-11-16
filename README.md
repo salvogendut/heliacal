@@ -76,8 +76,9 @@ make
 cargo run --release --locked
 ```
 
-The application opens **paused**. Choose the machine, display and original Sun
-PROM under **F9 > General**. TurboGX requires a 32 KiB FCode ROM; native
+The application opens **paused**. Choose the machine, display and firmware
+under **F9 > General**. An empty PROM path selects the installed OpenBIOS
+fallback; an explicit original Sun PROM takes precedence, including any errors. TurboGX requires a 32 KiB FCode ROM; native
 SS-20 SX does not. Save with **F9** and press **Ctrl+P** to boot. The default
 is 128 MiB; choose **Memory** in F9 for another exact supported total.
 Firmware and guest operating systems are not bundled. The Helios repository
@@ -268,6 +269,51 @@ expected. The firmware performs its 128 MiB memory test and may automatically
 attempt network boot. After the memory test, capture input and use
 **Pause+A** to interrupt it. Helios documents its graphical `ok` prompt
 checkpoint; startup may take several minutes.
+
+## Firmware selection
+
+An empty **F9 > General > PROM** path (`prom = ""`) selects OpenBIOS for flat
+settings and named machines. Select the PROM row and press Delete to clear an
+existing path and return to automatic selection. Alternatively, use Ctrl+E,
+Ctrl+U, then Enter to edit and clear it. Explicit missing/invalid images report an error; they do
+not select a fallback. `--prom ""` clears the configured PROM for one session.
+`--prom` remains a session override and accepts raw Sun
+PROMs or validated SPARC32 OpenBIOS ELF files. **F9 > About** shows the firmware
+and path actually loaded by the worker.
+
+Build the pinned Helios OpenBIOS port in the sibling core checkout:
+
+```sh
+cd ../helios
+python3 tools/build_openbios.py --jobs 4
+```
+
+Firmware is not bundled. The shared loader searches the local firmware,
+user data and system firmware directories; `HELIOS_OPENBIOS=/path/to/image.elf`
+selects a specific fallback. See [build prerequisites, provenance and full
+selection rules](../helios/docs/firmware.md#automatic-openbios-fallback).
+OpenBIOS requires at least 32 MiB and contiguous installed DRAM (128 MiB works
+on every model). It has no native SX console: select headless or CGsix, or
+provide original OBP for SX. TurboGX still needs its separate FCode ROM.
+During initialization, an **OpenBIOS / Console startup** notice replaces the
+blank screen until console content appears. RAM clearing delays the first
+serial bytes. The optimized port measured about 15 seconds to a serial prompt
+and 21 seconds to first TurboGX banner pixels in a 256 MiB SS-5 core benchmark
+(fast clocks); host speed and configuration affect startup time. The notice
+disappears once and stays gone if the guest later clears its screen.
+Graphical mode displays the Forth prompt on screen; headless mode uses TTYA.
+
+Each machine's OpenBIOS NVRAM appends `.openbios` to its existing NVRAM filename.
+OBP state is preserved separately, including when switching firmware on the
+same named machine. Fresh OpenBIOS headless machines do not need a prior
+graphical boot. They start at `0 >`; use `boot disk` or `boot cdrom`. The current
+port's halt/abort callbacks power off instead of returning to an OBP monitor.
+Serial and TurboGX graphical Forth consoles have been checked on all three
+models, including captured keyboard input. NetBSD disk boot/persistence and
+Solaris 2.6 CD single-user SMP boot are documented checkpoints; a general
+replacement-firmware desktop or installation claim is not implied.
+Original OBP remains the hardware-accuracy reference. Recorded compatibility
+and limits are in the core firmware document linked above.
 
 ## Headless serial console
 

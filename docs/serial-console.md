@@ -129,7 +129,8 @@ with an actionable message and preserves the existing guest. Initialize that
 machine graphically first. This is not a full-POST implementation or a repair
 for corrupt firmware state. An unrecognized PROM is left untouched and reports
 that automatic console selection is unavailable on stderr; configure its own
-serial console before using it headlessly. OpenBIOS compatibility is not claimed.
+serial console before using it headlessly. OpenBIOS instead uses its separate
+CHRP environment and explicit console selection; see [firmware selection](../README.md#firmware-selection).
 
 ## Solaris disk paths and clock reporting
 

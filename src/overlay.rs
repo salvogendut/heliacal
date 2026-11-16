@@ -190,7 +190,11 @@ impl Overlay {
                 ),
                 (
                     self.draft.model.prom_label(),
-                    path_label(&self.draft.prom),
+                    if self.draft.prom.is_empty() {
+                        "OpenBIOS (automatic)".into()
+                    } else {
+                        path_label(&self.draft.prom)
+                    },
                     Field::Prom,
                 ),
                 (

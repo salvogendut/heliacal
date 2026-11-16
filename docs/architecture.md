@@ -180,3 +180,17 @@ to a different draft. Path selection/Cancel are separate from explicit Create.
 The worker publishes through the core's private-file/no-overwrite helper.
 Successful creation changes only a draft target, leaving Save/F5 and named
 NVRAM identity unchanged. Discard never deletes the newly created user file.
+
+## Firmware ownership
+
+The worker uses Helios `FirmwareImage::load` once per construction and shares
+the CLI's explicit-PROM precedence and automatic OpenBIOS search. Failed
+selection/construction retains the running machine. `Snapshot::firmware`
+records the loaded kind/path for About; editing a draft does not change that
+report. OpenBIOS explicitly installs the core's firmware service and uses a
+separate CHRP NVRAM file (`.openbios` appended after model/named-machine identity).
+Changing firmware saves the old environment and loads the new one without
+conversion. Headless/graphical selection is passed to replacement firmware;
+Sun OBP's profile-specific environment selection remains separate. Core RAM
+and frontend native-SX firmware limits are checked before allocation or media
+attachment. See [core firmware notes](../../helios/docs/firmware.md).
