@@ -33,6 +33,12 @@ pub enum Field {
     Prom,
     Rom,
     Scsi(usize),
+    NewDisk,
+    NewDiskPath,
+    NewDiskSize,
+    NewDiskTarget,
+    CreateDisk,
+    CancelDisk,
     DiskAccess,
     Headless,
     SerialPtyLink,
@@ -50,7 +56,7 @@ impl Field {
     pub fn is_path(self) -> bool {
         matches!(
             self,
-            Self::Prom | Self::Rom | Self::Scsi(_) | Self::SerialPtyLink
+            Self::Prom | Self::Rom | Self::Scsi(_) | Self::SerialPtyLink | Self::NewDiskPath
         )
     }
 }
@@ -59,12 +65,19 @@ pub struct Row {
     pub value: String,
     pub field: Field,
 }
+#[derive(Clone, Debug)]
+pub struct DiskDraft {
+    pub path: String,
+    pub size_mib: u64,
+    pub target: usize,
+}
 pub struct Overlay {
     pub draft: Settings,
     pub tab: Tab,
     pub selected: usize,
     pub edit: Option<String>,
     pub notice: Option<String>,
+    pub new_disk: Option<DiskDraft>,
 }
 impl Overlay {
     pub fn new(settings: &Settings) -> Self {
@@ -74,6 +87,7 @@ impl Overlay {
             selected: 0,
             edit: None,
             notice: None,
+            new_disk: None,
         }
     }
     pub fn tabs(&self) -> Vec<Tab> {
@@ -87,6 +101,35 @@ impl Overlay {
         ]
     }
     pub fn rows(&self) -> Vec<Row> {
+        if let Some(disk) = &self.new_disk {
+            return vec![
+                Row {
+                    label: "New CHD disk",
+                    value: path_label(&disk.path),
+                    field: Field::NewDiskPath,
+                },
+                Row {
+                    label: "Capacity (MiB)",
+                    value: disk.size_mib.to_string(),
+                    field: Field::NewDiskSize,
+                },
+                Row {
+                    label: "Attach at",
+                    value: format!("SCSI ID {}", disk.target),
+                    field: Field::NewDiskTarget,
+                },
+                Row {
+                    label: "Create blank disk",
+                    value: "Create file and attach to draft".into(),
+                    field: Field::CreateDisk,
+                },
+                Row {
+                    label: "Cancel",
+                    value: "Return to media settings".into(),
+                    field: Field::CancelDisk,
+                },
+            ];
+        }
         match self.tab {
             Tab::General => vec![
                 (
@@ -183,6 +226,11 @@ impl Overlay {
                     Field::Scsi(id),
                 )
             })
+            .chain(std::iter::once((
+                "New blank CHD disk...",
+                "Choose capacity and destination".into(),
+                Field::NewDisk,
+            )))
             .collect(),
             Tab::Network => vec![
                 (
@@ -280,6 +328,9 @@ impl Overlay {
         self.draft != *live
     }
     pub fn switch_tab(&mut self, delta: isize) {
+        if self.new_disk.is_some() {
+            return;
+        }
         let tabs = self.tabs();
         let index = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
         self.tab = tabs[(index as isize + delta).rem_euclid(tabs.len() as isize) as usize];
@@ -287,6 +338,7 @@ impl Overlay {
     }
     pub fn path(&self, field: Field) -> Option<&String> {
         match field {
+            Field::NewDiskPath => self.new_disk.as_ref().map(|d| &d.path),
             Field::SerialPtyLink => Some(&self.draft.serial_pty_link),
             Field::Prom => Some(&self.draft.prom),
             Field::Rom => Some(&self.draft.cgsix_rom),
@@ -296,6 +348,7 @@ impl Overlay {
     }
     pub fn path_mut(&mut self, field: Field) -> Option<&mut String> {
         match field {
+            Field::NewDiskPath => self.new_disk.as_mut().map(|d| &mut d.path),
             Field::SerialPtyLink => Some(&mut self.draft.serial_pty_link),
             Field::Prom => Some(&mut self.draft.prom),
             Field::Rom => Some(&mut self.draft.cgsix_rom),
@@ -305,6 +358,37 @@ impl Overlay {
     }
     pub fn activate(&mut self) {
         match self.field() {
+            Field::NewDisk => {
+                let target = std::iter::once(3).chain(0..7).find(|&id| {
+                    self.draft.scsi[id].kind == TargetKind::Disconnected
+                        || self.draft.scsi[id].path.is_empty()
+                });
+                if let Some(target) = target {
+                    self.new_disk = Some(DiskDraft {
+                        path: String::new(),
+                        size_mib: 2048,
+                        target,
+                    });
+                    self.selected = 0;
+                } else {
+                    self.notice =
+                        Some("Detach a SCSI target in the draft before creating a disk.".into());
+                }
+            }
+            Field::NewDiskSize => {
+                self.edit = self.new_disk.as_ref().map(|d| d.size_mib.to_string())
+            }
+            Field::NewDiskTarget => {
+                if let Some(disk) = &mut self.new_disk
+                    && let Some(id) = (1..=7).map(|i| (disk.target + i) % 7).find(|&id| {
+                        self.draft.scsi[id].kind == TargetKind::Disconnected
+                            || self.draft.scsi[id].path.is_empty()
+                    })
+                {
+                    disk.target = id;
+                }
+            }
+            Field::CancelDisk => self.cancel_new_disk(),
             Field::MachineLabel => {
                 if !self.draft.next_machine() {
                     self.selected = 1;
@@ -389,7 +473,16 @@ impl Overlay {
 
     pub fn finish_edit(&mut self) -> Result<(), String> {
         if let Some(value) = self.edit.as_ref() {
-            if self.field() == Field::SaveMachineAs {
+            if self.field() == Field::NewDiskSize {
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("Capacity must be a positive number of MiB.".into());
+                }
+                let mib: u64 = value.parse().map_err(|_| "Invalid disk capacity.")?;
+                if !(1..=2_097_152).contains(&mib) {
+                    return Err("Capacity must be 1..2097152 MiB (SCSI limit: 2 TiB).".into());
+                }
+                self.new_disk.as_mut().unwrap().size_mib = mib;
+            } else if self.field() == Field::SaveMachineAs {
                 self.draft.save_as_machine(value)?;
             } else {
                 self.set_path(self.field(), value.clone());
@@ -408,6 +501,20 @@ impl Overlay {
         if let Some(path) = self.path_mut(field) {
             *path = value;
         }
+    }
+    pub fn cancel_new_disk(&mut self) {
+        self.new_disk = None;
+        self.edit = None;
+        self.selected = 7;
+    }
+    pub fn disk_created(&mut self, target: usize, path: String) {
+        self.draft.scsi[target] = crate::settings::ScsiTarget {
+            kind: TargetKind::Disk,
+            path,
+        };
+        self.new_disk = None;
+        self.edit = None;
+        self.selected = target;
     }
     pub fn cycle_target(&mut self) {
         if let Field::Scsi(id) = self.field() {

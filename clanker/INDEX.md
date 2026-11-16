@@ -1,5 +1,9 @@
 # Agent notes
 
+- [CHD implementation](chd-images-progress.md) — logical validation, persistent disk attachments, background creation and draft/Save/F5 acceptance.
+
+- [CHD frontend plan](chd-images-plan.md) — issue #6: shared media inspection, safe blank-image creation, SCSI drafts and persistence acceptance.
+
 - [Clock, serial boot and CDE follow-up](clock-serial-cde-followup.md) — compatible TurboGX ROM validation, selected CPU clocks, recovered Axil disk and rebuilt-core acceptance.
 
 - [serial-console-view.md](serial-console-view.md) — greyed headless Display row, live Advanced serial-view toggle, bounded ANSI terminal output, PTY fan-out and UI/Solaris validation.

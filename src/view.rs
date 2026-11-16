@@ -768,14 +768,14 @@ fn draw_overlay(
                 c,
                 144,
                 510,
-                "SCSI ID 7: host adapter (reserved). CD images are always read-only.",
+                if o.new_disk.is_some() { "Creates a new, unpartitioned CHD. Existing files are never overwritten." } else { "SCSI ID 7: host adapter (reserved). CD images are always read-only." },
                 MUTED,
             )?;
             text(
                 c,
                 144,
                 534,
-                "Set hard-disk access in Advanced; click the type or press Space to cycle.",
+                if o.new_disk.is_some() { "Created files are kept even if you later discard the settings draft." } else { "Compressed CHD writes persist in a .diff.chd file beside the base." },
                 MUTED,
             )?;
         }
@@ -832,6 +832,8 @@ fn draw_overlay(
             "Enter changes settings / edits path / runs action. Save + F5 applies hardware."
         } else if o.tab == Tab::Network {
             "Arrows navigate / Enter toggles host networking"
+        } else if o.new_disk.is_some() {
+            "Enter edits / chooses destination / creates. Escape cancels the form."
         } else if o.tab == Tab::Media {
             "Space type / Enter choose image / Ctrl+E type path / Delete detach"
         } else {
