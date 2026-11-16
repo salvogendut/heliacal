@@ -48,3 +48,18 @@ SDL linker symlink; both remain ignored build artifacts. Xvfb/xdotool ran
 inside the existing `my-distrobox` container with its own display and a
 temporary responder on PATH. The initial cancellation failure was reproduced
 there and passed after the empty-filename guard.
+
+## Follow-up: ID 6 CD-ROM default
+
+Fresh settings already selected CD-ROM at ID 6, but Delete disconnected it
+and choosing another image then defaulted every disconnected target to disk.
+`Overlay::set_path` now defaults a disconnected ID 6 to CD-ROM, including
+typed paths. Its picker also uses CD history while disconnected. IDs 0–5
+still default to disk; explicit/saved types and newly created CHD disks retain
+their chosen type. This does not migrate an existing saved hard disk at ID 6.
+
+Extended the SDL smoke to detach ID 6, check its remembered CD location,
+select a new temporary ISO, verify live settings remain untouched, and save
+and reload the CD-ROM type. Formatting, Clippy, all 107 tests with the existing
+`RUST_MIN_STACK=16777216` override, `make smoke` without the override, and the
+release build passed. No worker lifecycle or rendering changes were needed.

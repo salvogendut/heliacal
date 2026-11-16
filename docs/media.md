@@ -19,9 +19,12 @@ also through the SS-20/Axil standalone IOMMU.
 
 Targets default to empty, with hard disk/CD-ROM types preselected at IDs 3/6.
 Hard disks use read/write access by default; CDs never use writable access.
-Selecting an image for a disconnected target initially chooses hard disk;
-use Space to change it to CD-ROM as needed. Cycling a target to disconnected
-retains its path for later use. Saving checks the block size and readability
+Selecting an image for a disconnected target defaults to **CD-ROM at ID 6**
+and **hard disk at IDs 0–5**, including after Delete detaches an image.
+A disconnected ID 6 also uses the remembered CD directory in the picker.
+An explicitly selected or saved device type is preserved; use **Space** to
+change it. Cycling a target to disconnected retains its path for later use.
+Saving checks the block size and readability
 of each connected image, plus write access for read/write hard disks.
 
 Optional `--disk disk-scsi3.raw` selects ID 3; `--cdrom install.iso` selects ID 6.

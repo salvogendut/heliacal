@@ -33,6 +33,7 @@ impl Kind {
             Field::NewDiskPath => Some(Self::Disk),
             Field::Scsi(id) => Some(match settings.scsi.get(id)?.kind {
                 TargetKind::Cdrom => Self::Cdrom,
+                TargetKind::Disconnected if id == 6 => Self::Cdrom,
                 TargetKind::Disk | TargetKind::Disconnected => Self::Disk,
             }),
             _ => None,

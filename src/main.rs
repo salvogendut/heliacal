@@ -1358,10 +1358,32 @@ fn run(options: Options) -> Result<()> {
                     history.location(&fresh, Field::Scsi(6), base),
                     Some(base.join("smoke-cd-scsi1.iso"))
                 );
+                // Detach/reselect ID 6 through the UI: use CD history and
+                // restore its CD-ROM default without changing live settings.
+                let cdrom = base.join("smoke-cd-scsi6.iso");
+                std::fs::write(&cdrom, vec![0; 2048])?;
+                app.overlay.as_mut().unwrap().selected = 6;
+                app.key(Scancode::Delete, Mod::NOMOD, &video, canvas.window_mut())?;
+                assert_eq!(
+                    history.location(
+                        app.overlay.as_ref().unwrap(),
+                        Field::Scsi(6),
+                        app.config.parent().unwrap(),
+                    ),
+                    Some(app.config.parent().unwrap().join("smoke-cd-scsi1.iso"))
+                );
+                app.picked(Field::Scsi(6), &cdrom);
+                assert_eq!(
+                    app.overlay.as_ref().unwrap().draft.scsi[6].kind,
+                    TargetKind::Cdrom
+                );
+                assert!(app.settings.scsi[6].path.is_empty());
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 let saved = Settings::load(&app.config)?;
                 assert_eq!(saved.scsi[0].kind, TargetKind::Disk);
                 assert_eq!(saved.scsi[1].kind, TargetKind::Cdrom);
+                assert_eq!(saved.scsi[6].kind, TargetKind::Cdrom);
+                assert_eq!(saved.scsi[6].path, cdrom.display().to_string());
                 assert!(!saved.scsi[0].path.is_empty() && !saved.scsi[1].path.is_empty());
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;

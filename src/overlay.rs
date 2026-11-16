@@ -511,7 +511,11 @@ impl Overlay {
             && !value.is_empty()
             && self.draft.scsi[id].kind == TargetKind::Disconnected
         {
-            self.draft.scsi[id].kind = TargetKind::Disk;
+            self.draft.scsi[id].kind = if id == 6 {
+                TargetKind::Cdrom
+            } else {
+                TargetKind::Disk
+            };
         }
         if let Some(path) = self.path_mut(field) {
             *path = value;
