@@ -312,7 +312,12 @@ network (gateway 192.168.0.1), for example:
 `route add default 192.168.0.1`. The OS already detects `le0`; it is the
 guest network configuration that turns the interface up. The status strip shows
 RUN, CPU, NET and attached-media activity lamps; NET pulses as Ethernet frames
-cross the NAT.
+cross the NAT. On Linux, external IPv4 ping (including `www.google.com`) uses
+unprivileged host ICMP sockets. Gateway ping works without them. If external
+ping is unavailable, the app logs the host error; see
+[Helios networking](../helios/docs/networking.md) for Linux ping-group policy,
+packet-size limits and diagnostics. TCP NAT, IPv6 and traceroute remain
+unimplemented.
 Native desktop file-picker behavior and non-Linux hosts need interactive
 validation. The existing Prismatic and Iris repositories are independent.
 

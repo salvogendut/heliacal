@@ -1,5 +1,7 @@
 # Agent notes
 
+- [External IPv4 ping](icmp-echo.md) — Linux echo relay integration, host diagnostics, final release tests and guest configuration findings.
+
 - [RTC startup date](rtc-startup.md) — host UTC initialization, saved guest time option, transactional settings and matched core/frontend checks.
 
 - [CHD implementation](chd-images-progress.md) — logical validation, persistent disk attachments, background creation and draft/Save/F5 acceptance.
