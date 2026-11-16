@@ -1,18 +1,22 @@
 # README refresh — 2026-11-16
 
 Reorganized the README following the sibling Prismatic entry point, moving
-detailed usage into `docs/`. Retained the logo and added three real PNG
-captures without image editing. Sources in the sibling Helios checkout:
+detailed usage into `docs/`. Retained the logo. After feedback on screenshot
+quality, replaced scaled SDL window captures with native 1152×900 guest
+framebuffers and removed the halted NetBSD screenshot. Current sources in
+the sibling Helios checkout:
 
 | Published asset under `images/` | Original capture under `../helios/local/` |
 | --- | --- |
-| `solaris26-ss20-sx.png` | `completion-2026-11-13/desktop-input.png` |
-| `solaris26-axil320-cde.png` | `smp-slice4-2026-11-14/heliacal-axil/input-final.png` |
-| `netbsd-ss20-serial.png` | `heliacal-scrollback-2026-11-16/halted.png` |
+| `solaris26-ss20-sx.png` | `completion-2026-11-13/desktop-input.ppm` |
+| `solaris26-axil320-cde.png` | `review-smp-slice4-2026-11-15/gui-axil/desktop-ready.ppm.gz` |
 
-Each copied asset was compared byte for byte with its source. Captions follow
-`ss20-desktop-acceptance.md`, `gui-serial-console.md`, and the sibling core's
-`clanker/smp-progress.md` and `clanker/smp-slice4-review.md`.
+Decompressed the archived CDE PPM into `/tmp` and converted both PPMs to PNG
+with ImageMagick, without scaling, cropping or changing their content.
+Compared decoded RGB pixels against the originals. The CDE capture shows a
+clean terminal and clock before test input; it leads the README gallery.
+Captions follow `ss20-desktop-acceptance.md` and the sibling core's
+`clanker/smp-slice4-review.md`.
 
 Computed MD5 from the four tested files under `../helios/local/firmware/`.
 Their SHA-256 values match the existing core firmware documentation and
@@ -39,5 +43,5 @@ or OpenBIOS binaries were added, and no emulator behavior changed.
 
 Validation: local documentation links and heading anchors, Helios links
 against sibling sources, balanced code fences, parsed TOML examples/config,
-the four README MD5 values, copied image equality, and `git diff --check`.
+the four README MD5 values, screenshot pixel equality, and `git diff --check`.
 Cargo and guest smoke tests were not rerun for this documentation-only change.

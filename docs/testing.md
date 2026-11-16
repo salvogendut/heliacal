@@ -33,9 +33,10 @@ shifted punctuation. The guest halted, but OpenBIOS continued running; that
 recorded graphical run does not establish a successful host quit. These
 checks do not establish NetBSD X11 or SMP compatibility.
 
-The [README screenshots](../README.md#screenshots) are unmodified frontend
-captures from these sessions: SS-20/SX olwm on 2026-11-13, Axil/TurboGX CDE
-on 2026-11-15, and the headless NetBSD console after halt on 2026-11-16.
+The [README screenshots](../README.md#screenshots) are native 1152×900 guest
+framebuffer captures from these sessions: SS-20/SX olwm on 2026-11-13 and
+Axil/TurboGX CDE on 2026-11-15. The original PPMs were converted losslessly
+to PNG, preserving every pixel without scaling or frontend notifications.
 
 Native desktop file-picker behavior and non-Linux hosts need interactive
 validation. Native Wayland input was not separately replayed. Audio and

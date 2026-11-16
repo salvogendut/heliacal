@@ -39,20 +39,18 @@ including scrollback, selection/copy and a minicom command button. Enable
 
 ## Screenshots
 
+Guest desktops captured at their native **1152×900** resolution, saved
+losslessly as PNG.
+
+Solaris 2.6 CDE on an Axil 320 with TurboGX, 128 MiB RAM and the experimental
+two-CPU configuration:
+
+![Solaris 2.6 CDE desktop on Axil 320 with TurboGX](images/solaris26-axil320-cde.png)
+
 Solaris 2.6 running Xsun, olwm and xterm on a SPARCstation 20 with native
 SX/CG14 graphics and 128 MiB RAM:
 
 ![Solaris 2.6 olwm desktop on SPARCstation 20 with SX graphics](images/solaris26-ss20-sx.png)
-
-Solaris 2.6 CDE on an Axil 320 with TurboGX, 128 MiB RAM and the experimental
-two-CPU configuration; the terminal shows both processors online:
-
-![Solaris 2.6 CDE desktop on Axil 320 with TurboGX](images/solaris26-axil320-cde.png)
-
-Heliacal's embedded serial console after a clean NetBSD shutdown on a headless
-SPARCstation 20:
-
-![NetBSD clean shutdown in Heliacal's embedded serial console](images/netbsd-ss20-serial.png)
 
 These captures come from the [recorded guest checks](docs/testing.md#recorded-guest-checks).
 
