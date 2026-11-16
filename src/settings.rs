@@ -149,6 +149,7 @@ impl Model {
         }
     }
 
+    #[cfg(test)]
     pub fn default_nvram(self) -> helios::devices::nvram::Nvram {
         self.profile().default_nvram()
     }
@@ -337,12 +338,10 @@ impl Settings {
 
     fn validate_files(&self, base: &Path) -> Result<(), String> {
         let resolved = self.resolve(base);
-        let mut images = vec![(
-            "Sun PROM".to_string(),
-            &resolved.prom,
-            1,
-            helios::machine::MAX_PROM_BYTES as u64,
-        )];
+        if !resolved.prom.is_empty() {
+            helios::firmware::FirmwareImage::resolve(Some(Path::new(&resolved.prom)), &[])?;
+        }
+        let mut images = Vec::new();
         if !resolved.headless && resolved.display == Display::Cgsix {
             images.push(("TurboGX ROM".to_string(), &resolved.cgsix_rom, 32768, 32768));
         }

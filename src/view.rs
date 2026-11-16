@@ -391,6 +391,36 @@ pub fn draw(
         )?;
         text(c, 352, 578, "Ctrl+P  Boot the workstation", MUTED)?;
     }
+    if p.state.has_machine
+        && p.state.waiting_for_console
+        && matches!(p.state.phase, Phase::Running | Phase::Paused)
+    {
+        let y = if p.state.headless { 172 } else { 260 };
+        panel(c, Rect::new(144, y, 672, 128))?;
+        text(c, 168, y + 24, "OPENBIOS / CONSOLE STARTUP", ACCENT)?;
+        text(
+            c,
+            168,
+            y + 52,
+            if p.state.phase == Phase::Paused {
+                "Paused. Press Ctrl+P to continue startup."
+            } else {
+                "Firmware is initializing the console. Please wait."
+            },
+            TEXT,
+        )?;
+        text(
+            c,
+            168,
+            y + 80,
+            if p.state.headless {
+                "Serial output appears here once the firmware enables TTYA."
+            } else {
+                "The guest display appears when TurboGX is ready."
+            },
+            MUTED,
+        )?;
+    }
     draw_hints(c, &p)?;
     draw_leds(c, &p)?;
     if let Some(o) = p.overlay {
@@ -762,20 +792,45 @@ fn draw_overlay(
                     if i == 0 { ACCENT } else { MUTED },
                 )?;
             }
+            let firmware = state.firmware.as_deref().unwrap_or("Not booted");
+            text(c, 144, 544, "Active firmware:", ACCENT)?;
+            for (i, line) in firmware
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(84)
+                .take(2)
+                .enumerate()
+            {
+                text(
+                    c,
+                    144,
+                    570 + i as i32 * 20,
+                    &line.iter().collect::<String>(),
+                    MUTED,
+                )?;
+            }
         }
         Tab::Media => {
             text(
                 c,
                 144,
                 510,
-                if o.new_disk.is_some() { "Creates a new, unpartitioned CHD. Existing files are never overwritten." } else { "SCSI ID 7: host adapter (reserved). CD images are always read-only." },
+                if o.new_disk.is_some() {
+                    "Creates a new, unpartitioned CHD. Existing files are never overwritten."
+                } else {
+                    "SCSI ID 7: host adapter (reserved). CD images are always read-only."
+                },
                 MUTED,
             )?;
             text(
                 c,
                 144,
                 534,
-                if o.new_disk.is_some() { "Created files are kept even if you later discard the settings draft." } else { "Compressed CHD writes persist in a .diff.chd file beside the base." },
+                if o.new_disk.is_some() {
+                    "Created files are kept even if you later discard the settings draft."
+                } else {
+                    "Compressed CHD writes persist in a .diff.chd file beside the base."
+                },
                 MUTED,
             )?;
         }

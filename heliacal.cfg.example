@@ -5,7 +5,8 @@ model = "sparcstation5"
 # "cgsix" or "sx" (native SS-20 CG14)
 display = "cgsix"
 # F9 > General > Tinker exposes these under Advanced. Headless keeps the control window.
-# Requires initialized original-OBP NVRAM; see docs/serial-console.md.
+# Original OBP needs initialized NVRAM; OpenBIOS gets separate fresh state.
+# See docs/serial-console.md and README firmware selection.
 headless = false
 # Advanced: false = faster boots (100 ns); true = nominal 85/75 MHz rates.
 # Saved per named machine; applies at next boot / confirmed F5.
@@ -19,6 +20,8 @@ serial_pty_link = ""
 # SS-5: up to 256; SS-20/SX: up to 448; SS-20/CGsix or Axil: up to 512 MiB.
 ram_mib = 128
 # Paths are relative to this config's directory. Select your own ROMs in F9.
+# Empty selects the installed OpenBIOS fallback; explicit paths never fall back on errors.
+# OpenBIOS requires >=32 MiB, contiguous DRAM, and headless or CGsix (no native SX).
 prom = ""
 # Required only for graphical CGsix machines; ignored when headless.
 cgsix_rom = ""
@@ -47,6 +50,7 @@ scsi = [
 # F9 > General > Machine label recalls a complete workstation.
 # Fill in your image paths, relative to this config or absolute.
 # disk/cdrom abbreviate IDs 3/6; menu saves expand them into a full scsi array.
+# This SX example needs original OBP; set prom to your SS-20 ROM before booting.
 [machines."SS20 Solaris 2.6"]
 model = "sparcstation20"
 display = "sx"

@@ -7,6 +7,7 @@ use helios::{
         nvram::Nvram,
         serial::Channel,
     },
+    firmware::{FirmwareImage, FirmwareKind, OpenBiosConfig},
     machine::{Machine, SchedulerError},
     net::{NatConfig, NatEngine},
 };
@@ -67,6 +68,9 @@ pub struct Snapshot {
     pub has_machine: bool,
     pub machine_name: Option<String>,
     pub machine_description: Option<String>,
+    pub firmware: Option<String>,
+    /// Cold-boot notice; cleared by the first selected-console output.
+    pub waiting_for_console: bool,
     pub shutdown_failed: bool,
     pub scsi_activity: [(u64, u64); SCSI_TARGETS],
     pub network_activity: u64,
@@ -93,6 +97,8 @@ impl Default for Snapshot {
             has_machine: false,
             machine_name: None,
             machine_description: None,
+            firmware: None,
+            waiting_for_console: false,
             shutdown_failed: false,
             scsi_activity: [(0, 0); SCSI_TARGETS],
             network_activity: 0,
@@ -255,7 +261,20 @@ fn read_rom(path: &str, label: &str, max: usize) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|e| format!("{label}: {e}"))
 }
 
+fn selected_firmware(settings: &Settings) -> Result<FirmwareImage, String> {
+    FirmwareImage::load((!settings.prom.is_empty()).then(|| Path::new(&settings.prom)))
+}
+
+#[cfg(test)]
 fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
+    build_with_firmware(settings, nvram, &selected_firmware(settings)?)
+}
+
+fn build_with_firmware(
+    settings: &Settings,
+    nvram: Nvram,
+    firmware: &FirmwareImage,
+) -> Result<Machine, String> {
     let unix_seconds = if settings.rtc_host_time {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -264,18 +283,37 @@ fn build(settings: &Settings, nvram: Nvram) -> Result<Machine, String> {
     } else {
         0
     };
-    build_at(settings, nvram, unix_seconds)
+    build_at_with_firmware(settings, nvram, unix_seconds, firmware)
 }
 
+#[cfg(test)]
 fn build_at(settings: &Settings, nvram: Nvram, unix_seconds: u64) -> Result<Machine, String> {
+    build_at_with_firmware(settings, nvram, unix_seconds, &selected_firmware(settings)?)
+}
+
+fn build_at_with_firmware(
+    settings: &Settings,
+    nvram: Nvram,
+    unix_seconds: u64,
+    firmware: &FirmwareImage,
+) -> Result<Machine, String> {
     settings.validate()?;
     let profile = settings.model.profile();
-    let prom = read_rom(
-        &settings.prom,
-        settings.model.prom_label(),
-        helios::machine::MAX_PROM_BYTES,
-    )?;
-    let mut nvram = crate::obp_console::select(settings.model, &prom, nvram, settings.headless)?;
+    let prom = &firmware.bytes;
+    let mut nvram = if firmware.kind == FirmwareKind::OpenBios {
+        helios::firmware::validate_openbios_ram(
+            profile,
+            settings.ram_bytes()?,
+            settings.installed_video(),
+        )?;
+        helios::firmware::validate_openbios_nvram(&nvram)?;
+        if !settings.headless && settings.display == Display::Sx {
+            return Err("OpenBIOS does not yet provide a native SX console. Enable Headless Guest in F9 > Advanced, select CGsix, or supply original OBP for SX.".into());
+        }
+        nvram
+    } else {
+        crate::obp_console::select(settings.model, prom, nvram, settings.headless)?
+    };
     if settings.rtc_host_time {
         nvram
             .initialize_sun_clock(unix_seconds)
@@ -309,7 +347,7 @@ fn build_at(settings: &Settings, nvram: Nvram, unix_seconds: u64) -> Result<Mach
     let mut machine = Machine::with_profile_processors_video(
         profile,
         settings.ram_bytes()?,
-        &prom,
+        prom,
         nvram,
         usize::from(settings.cpus),
         settings.installed_video(),
@@ -317,6 +355,14 @@ fn build_at(settings: &Settings, nvram: Nvram, unix_seconds: u64) -> Result<Mach
     .map_err(|e| e.to_string())?;
     if settings.accurate_cpu_clocks {
         machine.reset_with_clock_mode(helios::machine::CpuClockMode::Hardware);
+    }
+    if firmware.kind == FirmwareKind::OpenBios {
+        machine.bus.install_openbios(OpenBiosConfig::new(
+            profile,
+            settings.ram_bytes()?,
+            u16::from(settings.cpus),
+            settings.headless,
+        ));
     }
     if let Some(graphics) = graphics {
         machine.install_cgsix(graphics).map_err(|e| e.to_string())?;
@@ -372,10 +418,12 @@ fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: 
     network.stats().guest_frames + network.stats().host_frames
 }
 
-fn load_nvram(path: &Path, model: Model) -> Result<Nvram, String> {
+fn load_nvram(path: &Path, model: Model, firmware: FirmwareKind) -> Result<Nvram, String> {
     match fs::read(path) {
         Ok(bytes) => Nvram::from_image(&bytes).map_err(|e| format!("{}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(model.default_nvram()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(firmware.default_nvram(model.profile()))
+        }
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
@@ -393,6 +441,17 @@ fn blit_pixels(
         frame_cache.pixels.resize(WIDTH * HEIGHT, 0);
     }
     draw(&mut frame_cache.pixels);
+    // A uniform framebuffer is still a blank console. Latch this off after
+    // visible content so later screen clears never redisplay the boot notice.
+    if state.waiting_for_console
+        && !state.headless
+        && frame_cache
+            .pixels
+            .iter()
+            .any(|pixel| *pixel != frame_cache.pixels[0])
+    {
+        state.waiting_for_console = false;
+    }
     let rgba = Arc::make_mut(&mut state.pixels);
     if rgba.len() != WIDTH * HEIGHT * 4 {
         rgba.resize(WIDTH * HEIGHT * 4, 0);
@@ -581,17 +640,23 @@ fn run(
                 Command::Boot(settings) => {
                     let old_phase = state.phase;
                     shared.lock().unwrap().phase = Phase::Loading;
-                    let target_path = settings.nvram_path(nvram_base);
-                    let nvram = (|| {
-                        if let Some(m) = &machine {
+                    let replacement = (|| {
+                        let firmware = selected_firmware(&settings)?;
+                        let target_path =
+                            firmware.kind.nvram_path(&settings.nvram_path(nvram_base));
+                        let nvram = if let Some(m) = &machine {
                             if nvram_path == target_path {
-                                return Ok(m.bus.devices().unwrap().nvram.clone());
+                                m.bus.devices().unwrap().nvram.clone()
+                            } else {
+                                atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())?;
+                                load_nvram(&target_path, settings.model, firmware.kind)?
                             }
-                            atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())?;
-                        }
-                        load_nvram(&target_path, settings.model)
-                    })();
-                    let replacement = nvram.and_then(|n| build(&settings, n)).and_then(|new| {
+                        } else {
+                            load_nvram(&target_path, settings.model, firmware.kind)?
+                        };
+                        let new = build_with_firmware(&settings, nvram, &firmware)?;
+                        let firmware_label =
+                            format!("{} ({})", firmware.kind.label(), firmware.path.display());
                         // Reserve a different endpoint before replacing the running machine.
                         let reuse = settings.headless
                             && serial
@@ -603,10 +668,20 @@ fn run(
                         } else {
                             None
                         };
-                        Ok((new, pty, reuse))
-                    });
+                        Ok::<_, String>((
+                            new,
+                            pty,
+                            reuse,
+                            target_path,
+                            firmware_label,
+                            firmware.kind,
+                        ))
+                    })();
                     match replacement {
-                        Ok((new, pty, reuse)) => {
+                        Ok((new, pty, reuse, target_path, firmware_label, firmware_kind)) => {
+                            eprintln!("Firmware: {firmware_label}");
+                            state.firmware = Some(firmware_label);
+                            state.waiting_for_console = firmware_kind == FirmwareKind::OpenBios;
                             if !reuse {
                                 serial.pty = pty;
                             }
@@ -737,6 +812,9 @@ fn run(
         if let Some(p) = &mut serial.pty {
             p.send(&bytes);
         }
+        if state.headless && !bytes.is_empty() {
+            state.waiting_for_console = false;
+        }
         frame_cache.console.process(&bytes);
         for byte in bytes {
             match byte {
@@ -809,6 +887,122 @@ mod tests {
             prom: dir.join("prom").display().to_string(),
             cgsix_rom: dir.join("gx").display().to_string(),
             ..Settings::default()
+        }
+    }
+
+    fn openbios_fixture() -> Vec<u8> {
+        let mut bytes = vec![0; 92];
+        bytes[..7].copy_from_slice(b"\x7fELF\x01\x02\x01");
+        for (offset, value) in [(16, 2u16), (18, 2), (40, 52), (42, 32), (44, 1)] {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        for (offset, value) in [
+            (20, 1u32),
+            (24, 0xffd0_0000),
+            (28, 52),
+            (52, 1),
+            (56, 84),
+            (60, 0xffd0_0000),
+            (64, 0xffd0_0000),
+            (68, 8),
+            (72, 16),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        bytes[84..].copy_from_slice(&[0x10, 0x80, 0, 0, 1, 0, 0, 0]);
+        bytes
+    }
+
+    #[test]
+    fn replacement_firmware_preflight_rejects_incompatible_state_and_hardware() {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("replacement.elf");
+        fs::write(&elf, openbios_fixture()).unwrap();
+        let firmware = FirmwareImage::resolve(Some(&elf), &[]).unwrap();
+        let mut settings = Settings {
+            model: Model::Sparcstation20,
+            display: Display::Sx,
+            network: false,
+            rtc_host_time: false,
+            ..Settings::default()
+        };
+        let fresh = || FirmwareKind::OpenBios.default_nvram(settings.model.profile());
+        assert!(
+            build_at_with_firmware(&settings, fresh(), 0, &firmware)
+                .err()
+                .unwrap()
+                .contains("native SX")
+        );
+        settings.headless = true;
+        assert!(
+            build_at_with_firmware(&settings, settings.model.default_nvram(), 0, &firmware)
+                .err()
+                .unwrap()
+                .contains("CHRP")
+        );
+        settings.model = Model::Sparcstation5;
+        settings.display = Display::Cgsix;
+        settings.ram_mib = 48;
+        let nvram = FirmwareKind::OpenBios.default_nvram(settings.model.profile());
+        assert!(
+            build_at_with_firmware(&settings, nvram, 0, &firmware)
+                .err()
+                .unwrap()
+                .contains("contiguous DRAM")
+        );
+    }
+
+    #[test]
+    fn firmware_switching_preserves_named_obp_nvram_and_keeps_openbios_separate() {
+        for model in [Model::Sparcstation5, Model::Sparcstation20, Model::Axil320] {
+            let dir = tempfile::tempdir().unwrap();
+            let elf = dir.path().join("replacement.elf");
+            let obp = dir.path().join("original.rom");
+            fs::write(&elf, openbios_fixture()).unwrap();
+            fs::write(&obp, [0x10, 0x80, 0, 0, 1, 0, 0, 0]).unwrap();
+            let mut settings = Settings {
+                model,
+                headless: true,
+                network: false,
+                rtc_host_time: false,
+                prom: elf.display().to_string(),
+                ..Settings::default()
+            };
+            settings.save_as_machine("firmware test").unwrap();
+            let base = dir.path().join("state.nvram");
+            let original_path = settings.nvram_path(&base);
+            let mut original = model.default_nvram().image();
+            original[0x100] = 0x5a;
+            fs::write(&original_path, &original).unwrap();
+            let emu = Emulator::new(base).unwrap();
+            emu.boot(settings.clone()).unwrap();
+            let running = wait(&emu, |s| s.steps > 10);
+            assert_eq!(running.phase, Phase::Running);
+            assert!(running.firmware.as_ref().unwrap().starts_with("OpenBIOS"));
+            assert!(running.serial_endpoint.is_some());
+            emu.pause().unwrap();
+            wait(&emu, |s| s.phase == Phase::Paused);
+            settings.prom = obp.display().to_string();
+            emu.boot(settings.clone()).unwrap();
+            wait(&emu, |s| {
+                s.firmware.as_ref().is_some_and(|f| f.starts_with("OBP"))
+            });
+            let separate = FirmwareKind::OpenBios.nvram_path(&original_path);
+            let saved = Nvram::from_image(&fs::read(&separate).unwrap()).unwrap();
+            helios::firmware::validate_openbios_nvram(&saved).unwrap();
+            assert_eq!(fs::read(&original_path).unwrap(), original);
+            emu.pause().unwrap();
+            let paused = wait(&emu, |s| s.phase == Phase::Paused);
+            settings.prom = dir.path().join("missing.rom").display().to_string();
+            emu.boot(settings).unwrap();
+            let failed = wait(&emu, |s| s.error.is_some());
+            assert_eq!(failed.phase, Phase::Paused);
+            assert_eq!(failed.firmware, paused.firmware);
+            assert!(failed.has_machine);
+            emu.shutdown().unwrap();
+            wait(&emu, |s| s.phase == Phase::Stopped);
+            drop(emu);
+            assert_eq!(fs::read(&original_path).unwrap(), original);
         }
     }
 
@@ -1102,6 +1296,28 @@ mod tests {
         let machine = build(&axil, Nvram::default()).unwrap();
         assert!(machine.bus.sx().is_none() && machine.bus.cgsix().is_some());
     }
+    #[test]
+    fn openbios_notice_waits_for_content_and_stays_gone_after_screen_clear() {
+        let mut state = Snapshot {
+            waiting_for_console: true,
+            ..Snapshot::default()
+        };
+        let mut cache = FrameCache::default();
+        blit_pixels(&mut state, &mut cache, 0, |p| p.fill(0));
+        assert!(state.waiting_for_console);
+        blit_pixels(&mut state, &mut cache, 1, |p| p.fill(0xaaaaaa));
+        assert!(state.waiting_for_console);
+        blit_pixels(&mut state, &mut cache, 2, |p| p[40] = 0);
+        assert!(!state.waiting_for_console);
+        blit_pixels(&mut state, &mut cache, 3, |p| p.fill(0));
+        assert!(!state.waiting_for_console);
+        // A framebuffer cannot satisfy the selected headless console.
+        state.waiting_for_console = true;
+        state.headless = true;
+        blit_pixels(&mut state, &mut cache, 4, |p| p[40] = 0xffffff);
+        assert!(state.waiting_for_console);
+    }
+
     #[test]
     fn worker_build_uses_selected_ram_and_video_without_a_transient_sx() {
         use crate::settings::Model;

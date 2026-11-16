@@ -43,8 +43,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const PROM_FILTERS: [DialogFileFilter<'static>; 2] = [
     DialogFileFilter {
-        name: "Sun PROM firmware",
-        pattern: "bin;rom;prom",
+        name: "OBP or OpenBIOS firmware",
+        pattern: "bin;rom;prom;elf",
     },
     DialogFileFilter {
         name: "All files",
@@ -122,7 +122,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. Supply your own firmware. Hard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Confirm quit\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -610,8 +610,14 @@ fn run(options: Options) -> Result<()> {
         settings = settings.resolve(source_config.parent().unwrap());
     }
     options.apply_hardware(&mut settings)?;
+    if let Some(path) = options.prom {
+        settings.prom = if path.is_empty() {
+            path
+        } else {
+            std::path::absolute(path)?.to_string_lossy().into_owned()
+        };
+    }
     for (dest, source) in [
-        (&mut settings.prom, options.prom),
         (&mut settings.cgsix_rom, options.rom),
         (&mut settings.serial_pty_link, options.serial_pty_link),
     ] {
@@ -697,6 +703,7 @@ fn run(options: Options) -> Result<()> {
     let mut last_leds = u64::MAX;
     let mut last_phase = Phase::Ready;
     let mut last_has_machine = false;
+    let mut last_waiting_for_console = false;
     let mut last_machine_name: Option<String> = None;
     let mut last_error: Option<String> = None;
     let mut last_notice: Option<String> = None;
@@ -898,6 +905,7 @@ fn run(options: Options) -> Result<()> {
         }
         if state.phase != last_phase
             || state.has_machine != last_has_machine
+            || state.waiting_for_console != last_waiting_for_console
             || state.machine_name != last_machine_name
             || state.error != last_error
             || state.shutdown_failed != last_shutdown_failed
@@ -906,6 +914,7 @@ fn run(options: Options) -> Result<()> {
             redraw = true;
             last_phase = state.phase;
             last_has_machine = state.has_machine;
+            last_waiting_for_console = state.waiting_for_console;
             last_machine_name = state.machine_name.clone();
             last_error = state.error.clone();
             last_shutdown_failed = state.shutdown_failed;

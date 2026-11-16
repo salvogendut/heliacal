@@ -1,5 +1,7 @@
 # Agent notes
 
+- [Automatic OpenBIOS fallback](openbios-fallback.md) — shared selection, separate NVRAM, original-OBP regressions, graphical/PTY input acceptance, and startup notice, native-search firmware speedup and validated empty-PROM CLI override.
+
 - [External IPv4 ping](icmp-echo.md) — Linux echo relay integration, host diagnostics, final release tests and guest configuration findings.
 
 - [RTC startup date](rtc-startup.md) — host UTC initialization, saved guest time option, transactional settings and matched core/frontend checks.
