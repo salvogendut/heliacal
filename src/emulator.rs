@@ -355,6 +355,9 @@ fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: 
         network.input(&frame, now);
     }
     network.poll(now);
+    if let Some(warning) = network.take_network_warning() {
+        eprintln!("Host NAT: {warning}");
+    }
     while let Some(frame) = network.output() {
         if !machine
             .bus
