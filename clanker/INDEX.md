@@ -1,5 +1,7 @@
 # Agent notes
 
+- [RTC startup date](rtc-startup.md) — host UTC initialization, saved guest time option, transactional settings and matched core/frontend checks.
+
 - [CHD implementation](chd-images-progress.md) — logical validation, persistent disk attachments, background creation and draft/Save/F5 acceptance.
 
 - [CHD frontend plan](chd-images-plan.md) — issue #6: shared media inspection, safe blank-image creation, SCSI drafts and persistence acceptance.

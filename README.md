@@ -347,9 +347,23 @@ interpreted instructions during guest timer waits. It does not model full
 pipeline/cache timing or improve host throughput.
 
 The choice is stored per named machine as `accurate_cpu_clocks = false`.
+
 Save applies it to the next boot; an existing guest requires confirmed **F5**
 replacement so firmware and Solaris recalibrate. Discard/Cancel leave the
 running clock unchanged. Labels, NVRAM identity and disk paths are retained.
+
+**F9 > Advanced > RTC at startup** defaults to **Host UTC**. Enable
+**General > Tinker** to expose it. Each boot or confirmed F5 cold replacement
+sets the RTC calendar to current host UTC, preserving the machine's firmware
+settings and identity. Old configurations also use this default. To keep a
+historical or guest-set date, select **Saved guest time** (`rtc_host_time = false`).
+The choice is saved per named machine and takes effect at the next boot/F5;
+saving a draft does not change a running guest's clock. Pause/resume and guest
+resets retain the clock. After startup, time advances with the emulated machine;
+this is not continuous host-time synchronization and does not change CPU speed.
+This avoids the year-2000 initial clock and NetBSD's fallback to the disk's older
+filesystem date. Restart an already running Heliacal process to load the rebuild.
+
 
 ## CHD disks and new images
 

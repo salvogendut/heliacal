@@ -46,6 +46,7 @@ pub enum Field {
     SerialBreak,
     SerialConsole,
     AccurateClocks,
+    RtcHostTime,
     Network,
     Smoothing,
     Scanlines,
@@ -299,6 +300,15 @@ impl Overlay {
                             },
                             Field::AccurateClocks,
                         ),
+                        (
+                            "RTC at startup",
+                            if self.draft.rtc_host_time {
+                                "Host UTC".into()
+                            } else {
+                                "Saved guest time".into()
+                            },
+                            Field::RtcHostTime,
+                        ),
                     ]);
                 }
                 rows
@@ -436,6 +446,7 @@ impl Overlay {
             }
             Field::SerialConsole => self.draft.show_serial_console ^= true,
             Field::AccurateClocks => self.draft.accurate_cpu_clocks ^= true,
+            Field::RtcHostTime => self.draft.rtc_host_time ^= true,
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
             Field::Smoothing => self.draft.smoothing ^= true,
@@ -790,6 +801,35 @@ mod tests {
         assert!(!o.draft.network);
         assert!(o.dirty(&settings));
         assert!(!settings.hardware_eq(&o.draft));
+    }
+
+    #[test]
+    fn rtc_startup_is_tinker_gated_and_transactional() {
+        let settings = Settings::default();
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Advanced;
+        assert!(!o.rows().iter().any(|r| r.field == Field::RtcHostTime));
+        let settings = Settings {
+            tinker: true,
+            ..settings
+        };
+        let mut o = Overlay::new(&settings);
+        o.tab = Tab::Advanced;
+        o.selected = o
+            .rows()
+            .iter()
+            .position(|r| r.field == Field::RtcHostTime)
+            .unwrap();
+        assert_eq!(o.rows()[o.selected].value, "Host UTC");
+        o.activate();
+        assert_eq!(o.rows()[o.selected].value, "Saved guest time");
+        assert!(settings.rtc_host_time);
+        assert!(!o.draft.rtc_host_time);
+        assert!(o.dirty(&settings));
+        assert!(!o.draft.hardware_eq(&settings));
+        assert!(!o.draft.accurate_cpu_clocks);
+        o.activate();
+        assert!(!o.dirty(&settings));
     }
 
     #[test]

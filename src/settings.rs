@@ -176,6 +176,7 @@ pub struct Settings {
     pub serial_pty_link: String,
     pub cpus: u8,
     pub accurate_cpu_clocks: bool,
+    pub rtc_host_time: bool,
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
@@ -200,6 +201,7 @@ impl Default for Settings {
             serial_pty_link: String::new(),
             cpus: 1,
             accurate_cpu_clocks: false,
+            rtc_host_time: true,
             ram_mib: RAM_MIB,
             prom: String::new(),
             cgsix_rom: String::new(),
@@ -389,6 +391,7 @@ impl Settings {
             && self.model == other.model
             && self.cpus == other.cpus
             && self.accurate_cpu_clocks == other.accurate_cpu_clocks
+            && self.rtc_host_time == other.rtc_host_time
             && self.display == other.display
             && self.headless == other.headless
             && self.serial_pty_link == other.serial_pty_link
@@ -526,6 +529,30 @@ pub fn default_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rtc_defaults_to_host_and_roundtrips_per_machine_without_changing_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.cfg");
+        let mut settings: Settings = toml::from_str("model = 'sparcstation20'").unwrap();
+        assert!(settings.rtc_host_time);
+        settings.save_as_machine("Host").unwrap();
+        settings.save_as_machine("Saved").unwrap();
+        let nvram = settings.nvram_path(&path);
+        let original = settings.clone();
+        settings.rtc_host_time = false;
+        assert!(!settings.hardware_eq(&original));
+        assert_eq!(settings.nvram_path(&path), nvram);
+        settings.save(&path).unwrap();
+        let mut loaded = Settings::load(&path).unwrap();
+        assert!(!loaded.rtc_host_time);
+        loaded.select_machine("Host").unwrap();
+        assert!(loaded.rtc_host_time);
+        loaded.select_machine("Saved").unwrap();
+        assert!(!loaded.rtc_host_time);
+        let old: crate::profiles::NamedMachine = toml::from_str("model = 'axil320'").unwrap();
+        assert!(old.rtc_host_time);
+    }
 
     #[test]
     fn clock_mode_defaults_fast_and_roundtrips_per_named_machine() {
