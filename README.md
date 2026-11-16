@@ -86,6 +86,7 @@ Hard disks default to **read/write**; CDs remain read-only. Advanced provides
 a hard-disk read-only option. The Media page can also create blank CHD disks.
 See [media and storage](docs/media.md) for image formats, SCSI selection and
 persistent CHD companion files.
+File pickers remember separate firmware, disk and CD locations across restarts.
 
 ## Firmware and PROM images
 

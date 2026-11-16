@@ -3,4 +3,5 @@
 *.cfg
 *.nvram
 *.cfg.lock
+*.picker.toml
 /heliacal-*.ppm

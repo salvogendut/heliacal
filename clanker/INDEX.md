@@ -1,5 +1,7 @@
 # Agent notes
 
+- [File-picker history](file-picker-history.md) — persistent firmware/disk/CD locations, independent drafts, cancellation handling and isolated SDL dialog checks.
+
 - [README refresh](readme-refresh.md) — guide extraction, screenshot provenance, original ROM MD5 verification and the separately installed OpenBIOS clarification.
 
 - [Interactive headless console](gui-serial-console.md) — focused TTYA typing, bounded scrollback and selection, dark rendering, serial/graphical clipboard paste, and NetBSD SDL acceptance.

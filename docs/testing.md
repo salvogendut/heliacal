@@ -65,4 +65,8 @@ pause/resume, failed replacement, and a cold switch back to one CPU, plus
 real-core lifecycle behavior with synthetic firmware, settings failure paths,
 all seven SCSI IDs, disk/CD selection, input backpressure, shared modifier
 keys, and failed NVRAM save/retry.
+Picker checks cover separate firmware/disk/CD history, persistence across
+restarts and Discard, relative and missing paths, and new-disk destinations.
+The SDL smoke also verifies that an empty picker result leaves both the
+draft and saved picker history unchanged.
 See [architecture](architecture.md) for the frontend/core boundary.

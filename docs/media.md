@@ -9,6 +9,9 @@ CD-ROM, or disconnected; **ID 7 is reserved for the host adapter**. Press
 **Space** on a target, or click its type, to cycle the device type. Press
 **Enter** or click its image path to open the system file picker (Ctrl+B does
 the same); **Ctrl+E** lets you type a path instead.
+Empty targets start the picker at the last chosen disk or CD location, with
+separate histories that persist across restarts. Targets with an image
+already selected start at that image.
 Use **Delete** to detach and clear a target. Multiple disks and CDs may be
 attached simultaneously. Changes take effect on the next confirmed cold reset.
 The original OBP `probe-scsi-all` discovers attached targets on SS-5 and now
@@ -37,8 +40,9 @@ F9 → Media → **New blank CHD disk...** lets you choose the destination,
 capacity in MiB (2048 by default), and an unused SCSI target. Enter chooses a
 path in the save dialog; Ctrl+E also lets you type it. The suggested filename
 includes the selected target, such as `new-disk-scsi3.chd`. Keep the intended
-SCSI ID in custom disk names and attach them at that ID. Select **Create blank
-disk** to create an uncompressed, sparse, zero-filled CHD. Existing files are
+SCSI ID in custom disk names. The save dialog reuses the last disk directory
+with this new filename. Attach new disks at their intended ID. Select
+**Create blank disk** to create an uncompressed, sparse, zero-filled CHD. Existing files are
 never overwritten. The form can be cancelled before creation; while the
 short creation job finishes, editing and Quit wait for completion. A failed
 creation leaves the form available for correction.

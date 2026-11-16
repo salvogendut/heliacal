@@ -27,6 +27,15 @@ outside text entry. **Escape** cancels text entry; with a changed draft it
 offers **Save**, **Discard**, or **Cancel**. Confirmation dialogs default to
 Cancel; use arrows and Enter, or click a choice.
 
+File pickers remember the last chosen file across restarts, with separate
+locations for firmware (system PROM and TurboGX ROM), hard disks, and CDs.
+A row with an existing image starts there; an empty row uses its remembered
+location. If a file or directory has disappeared, the picker uses the nearest
+existing parent directory. New blank disks reuse the last disk directory
+with a fresh `new-disk-scsiN.chd` suggestion. Cancel leaves the history unchanged.
+History is saved when you choose a file, independently of Save/Discard;
+machine settings and attachments still change only through the settings draft.
+
 Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
 RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
 can be hidden. **Advanced** selects hard-disk read/write or read-only access.

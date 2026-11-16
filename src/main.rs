@@ -3,6 +3,7 @@ mod activity;
 mod chd_tests;
 mod disk_creation;
 mod emulator;
+mod file_picker;
 #[cfg(test)]
 mod headless_tests;
 mod input;
@@ -208,6 +209,7 @@ struct App {
     overlay: Option<Overlay>,
     confirm: Option<(Confirm, usize)>,
     picker: Option<FilePicker>,
+    picker_history: file_picker::History,
     creation: Option<disk_creation::Creation>,
     held: input::HeldKeys,
     captured: bool,
@@ -298,19 +300,10 @@ impl App {
             }
             _ => return Ok(()),
         };
-        let location = self
-            .overlay
-            .as_ref()
-            .and_then(|o| o.path(field))
-            .filter(|path| !path.is_empty())
-            .map(|path| {
-                let path = PathBuf::from(path);
-                if path.is_relative() {
-                    self.config.parent().unwrap_or(Path::new(".")).join(path)
-                } else {
-                    path
-                }
-            });
+        let location = self.overlay.as_ref().and_then(|o| {
+            self.picker_history
+                .location(o, field, self.config.parent().unwrap_or(Path::new(".")))
+        });
         let (send, receive) = mpsc::sync_channel(1);
         let callback: sdl3::dialog::DialogCallback = Box::new(
             move |files: std::result::Result<Vec<PathBuf>, sdl3::dialog::DialogError>, _| {
@@ -318,25 +311,12 @@ impl App {
             },
         );
         if field == Field::NewDiskPath {
-            let target = self
-                .overlay
-                .as_ref()
-                .and_then(|o| o.new_disk.as_ref())
-                .map_or(3, |disk| disk.target);
-            let destination = location.or_else(|| {
-                Some(
-                    self.config
-                        .parent()
-                        .unwrap_or(Path::new("."))
-                        .join(format!("new-disk-scsi{target}.chd")),
-                )
-            });
             sdl3::dialog::show_save_file_dialog(
                 &[DialogFileFilter {
                     name: "CHD hard disk",
                     pattern: "chd",
                 }],
-                destination,
+                location,
                 window,
                 callback,
             )
@@ -348,8 +328,23 @@ impl App {
         Ok(())
     }
     fn picked(&mut self, field: Field, path: &std::path::Path) {
+        // Some native backends report cancellation as an empty filename.
+        if path.as_os_str().is_empty() {
+            return;
+        }
         if let Some(o) = &mut self.overlay {
             o.set_path(field, path.display().to_string());
+            self.picker_history.remember(
+                field,
+                &o.draft,
+                path,
+                self.config.parent().unwrap_or(Path::new(".")),
+            );
+            if let Err(error) = self.picker_history.save(&self.config) {
+                self.notify(format!(
+                    "Image selected, but picker history could not be saved: {error}"
+                ));
+            }
         }
     }
     fn activate(&mut self, window: &sdl3::video::Window) -> std::result::Result<(), String> {
@@ -777,6 +772,10 @@ fn run(options: Options) -> Result<()> {
         .as_ref()
         .map_or(source_config, |dir| dir.path().join("heliacal.cfg"));
     let _config_lock = settings::lock_config(&config)?;
+    let picker_history = file_picker::History::load(&config).unwrap_or_else(|error| {
+        eprintln!("File picker history unavailable: {error}");
+        file_picker::History::default()
+    });
     let emulator = Emulator::new(settings::companion_path(&config, ".nvram"))?;
     let mut app = App {
         settings,
@@ -785,6 +784,7 @@ fn run(options: Options) -> Result<()> {
         overlay: None,
         confirm: None,
         picker: None,
+        picker_history,
         creation: None,
         held: input::HeldKeys::default(),
         captured: false,
@@ -1284,6 +1284,23 @@ fn run(options: Options) -> Result<()> {
                     app.picked(Field::Scsi(id), &path);
                 }
                 assert!(app.settings.scsi[0].path.is_empty());
+                let draft_before_cancel = app.overlay.as_ref().unwrap().draft.clone();
+                let history_path = settings::companion_path(&app.config, ".picker.toml");
+                let history_before_cancel = std::fs::read(&history_path)?;
+                app.picked(Field::Scsi(0), Path::new(""));
+                assert_eq!(app.overlay.as_ref().unwrap().draft, draft_before_cancel);
+                assert_eq!(std::fs::read(history_path)?, history_before_cancel);
+                let history = file_picker::History::load(&app.config)?;
+                let fresh = Overlay::new(&app.settings);
+                let base = app.config.parent().unwrap();
+                assert_eq!(
+                    history.location(&fresh, Field::Scsi(2), base),
+                    Some(base.join("smoke-disk-scsi0.raw"))
+                );
+                assert_eq!(
+                    history.location(&fresh, Field::Scsi(6), base),
+                    Some(base.join("smoke-cd-scsi1.iso"))
+                );
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 let saved = Settings::load(&app.config)?;
                 assert_eq!(saved.scsi[0].kind, TargetKind::Disk);
@@ -1325,6 +1342,14 @@ fn run(options: Options) -> Result<()> {
                 app.confirm = Some((Confirm::Unsaved, 1));
                 app.confirm();
                 assert!(created.is_file() && app.settings.scsi[3].path.is_empty());
+                assert_eq!(
+                    file_picker::History::load(&app.config)?.location(
+                        &Overlay::new(&app.settings),
+                        Field::Scsi(3),
+                        app.config.parent().unwrap(),
+                    ),
+                    Some(created.clone())
+                );
                 app.key(Scancode::F9, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
                 app.key(Scancode::Right, Mod::NOMOD, &video, canvas.window_mut())?;
@@ -1430,7 +1455,7 @@ fn run(options: Options) -> Result<()> {
                     canvas.read_pixels(None)?.save_bmp(path)?;
                 }
                 println!(
-                    "SDL smoke test passed: paused launch, overlay editing, unsaved draft dialog, SCSI targets, named machines and saved settings."
+                    "SDL smoke test passed: paused launch, overlay editing, unsaved draft dialog, SCSI targets, picker history, named machines and saved settings."
                 );
                 app.emulator.shutdown()?;
                 app.quitting = true;

@@ -27,6 +27,12 @@ is `<config-path>.lock`. Concurrent instances cannot use the same config.
 Choose a different config for another workstation instance. Keep
 firmware/disks under ignored `local/` if storing them in this repository.
 
+File-picker locations are saved separately in `<config-path>.picker.toml`.
+They are shared by the named machines in that catalog and survive restarting
+Heliacal or discarding a settings draft. Selecting a file updates this history
+without saving hardware settings or attaching media. Cancelling a picker
+does not update it. Deleting this optional file resets the remembered locations.
+
 Fresh NVRAM lets OBP initialize its defaults. The initial checksum message is
 expected. The firmware tests the configured RAM (128 MiB by default) and may
 automatically attempt network boot. After the memory test, capture input and use
