@@ -8,7 +8,7 @@ use helios::{
         serial::Channel,
     },
     firmware::{FirmwareImage, FirmwareKind, OpenBiosConfig},
-    machine::{Machine, SchedulerError},
+    machine::{Machine, SOLARIS_IDLE_NPC, SOLARIS_IDLE_PC, SOLARIS_IDLE_PSR, SchedulerError},
     net::{NatConfig, NatEngine},
 };
 use std::{
@@ -662,6 +662,152 @@ impl SerialBridge {
     }
 }
 
+const PARK_BUDGET_NS: u64 = 2_000_000;
+
+struct ParkPlan {
+    token: helios::machine::ParkingToken,
+    wait_ns: u64,
+}
+
+struct ParkContext<'a> {
+    input: &'a Mutex<Input>,
+    receive: &'a mpsc::Receiver<Command>,
+    pending_command: &'a mut Option<Command>,
+    serial: &'a mut SerialBridge,
+    pending_keys: bool,
+    network: &'a mut Option<NatEngine>,
+    abort: &'a AtomicBool,
+}
+
+fn host_work_pending(context: &mut ParkContext<'_>) -> bool {
+    if context.abort.load(Ordering::Relaxed)
+        || context.pending_command.is_some()
+        || context.pending_keys
+    {
+        return true;
+    }
+    if let Ok(command) = context.receive.try_recv() {
+        *context.pending_command = Some(command);
+        return true;
+    }
+    {
+        let keys = context.input.lock().unwrap();
+        if !keys.queue.is_empty()
+            || !keys.paste.is_empty()
+            || !keys.mouse.is_empty()
+            || keys.release
+            || keys.serial.front().is_some()
+        {
+            return true;
+        }
+    }
+    let Some(pty) = context.serial.pty.as_mut() else {
+        return false;
+    };
+    let _ = pty.poll();
+    pty.pending_input_output()
+}
+
+fn prepare_park(machine: &Machine, context: &mut ParkContext<'_>) -> Option<ParkPlan> {
+    if context.serial.break_pending || context.serial.break_active {
+        return None;
+    }
+    if machine.cpu.pc() != SOLARIS_IDLE_PC
+        || machine.cpu.npc() != SOLARIS_IDLE_NPC
+        || machine.cpu.psr() != SOLARIS_IDLE_PSR
+    {
+        return None;
+    }
+    if host_work_pending(context) {
+        return None;
+    }
+    let now = machine.virtual_ns();
+    let next = machine.timebase().next_ns?;
+    if next <= now {
+        return None;
+    }
+    let wait_ns = next.saturating_sub(now).min(PARK_BUDGET_NS);
+    let token = machine.parking_token().ok()?;
+    if host_work_pending(context) {
+        return None;
+    }
+    Some(ParkPlan { token, wait_ns })
+}
+
+fn commit_park(
+    machine: &mut Machine,
+    plan: ParkPlan,
+    context: &mut ParkContext<'_>,
+) -> Option<helios::machine::ParkedAdvance> {
+    let started = Instant::now();
+    commit_park_with(machine, plan, context, thread::sleep, || started.elapsed())
+}
+
+fn commit_park_with(
+    machine: &mut Machine,
+    plan: ParkPlan,
+    context: &mut ParkContext<'_>,
+    mut wait: impl FnMut(Duration),
+    mut elapsed: impl FnMut() -> Duration,
+) -> Option<helios::machine::ParkedAdvance> {
+    wait(Duration::from_nanos(plan.wait_ns));
+    let elapsed_ns = u64::try_from(elapsed().as_nanos())
+        .unwrap_or(u64::MAX)
+        .min(plan.wait_ns);
+    if context.serial.break_pending || context.serial.break_active || host_work_pending(context) {
+        return None;
+    }
+    let network_before = context.network.as_ref().map_or(0, |engine| {
+        engine.stats().guest_frames + engine.stats().host_frames
+    });
+    let network_after = service_network(machine, context.network, Instant::now());
+    if network_after != network_before {
+        return None;
+    }
+    if elapsed_ns == 0 {
+        return None;
+    }
+    machine.advance_parked(plan.token, elapsed_ns).ok()
+}
+
+fn try_park(machine: &mut Machine, context: &mut ParkContext<'_>) -> bool {
+    let Some(plan) = prepare_park(machine, context) else {
+        return false;
+    };
+    commit_park(machine, plan, context).is_some()
+}
+fn drain_console(
+    machine: &mut Machine,
+    state: &mut Snapshot,
+    serial: &mut SerialBridge,
+    frame_cache: &mut FrameCache,
+) {
+    let bytes = machine
+        .bus
+        .devices_mut()
+        .unwrap()
+        .serial
+        .take_output(Channel::A);
+    if let Some(pty) = &mut serial.pty {
+        pty.send(&bytes);
+    }
+    if state.headless && !bytes.is_empty() {
+        state.waiting_for_console = false;
+    }
+    frame_cache.console.process(&bytes);
+    for byte in bytes {
+        match byte {
+            b'\n' => state.serial.push('\n'),
+            b'\r' => {}
+            0x20..=0x7e => state.serial.push(char::from(byte)),
+            _ => {}
+        }
+    }
+    if state.serial.len() > 8192 {
+        state.serial.drain(..state.serial.len() - 8192);
+    }
+}
+
 fn run(
     receive: mpsc::Receiver<Command>,
     shared: Arc<Mutex<Snapshot>>,
@@ -679,16 +825,20 @@ fn run(
     let mut pending_keys: VecDeque<(u8, bool)> = VecDeque::new();
     let mut pending_mouse: VecDeque<MouseEvent> = VecDeque::new();
     let mut saved = false;
+    let mut idle_parking = false;
+    let mut pending_command: Option<Command> = None;
     let mut serial = SerialBridge::default();
     loop {
         if abort.load(Ordering::Relaxed) {
             break;
         }
-        let command = if state.phase == Phase::Running {
-            receive.try_recv().ok()
-        } else {
-            receive.recv_timeout(Duration::from_millis(10)).ok()
-        };
+        let command = pending_command.take().or_else(|| {
+            if state.phase == Phase::Running {
+                receive.try_recv().ok()
+            } else {
+                receive.recv_timeout(Duration::from_millis(10)).ok()
+            }
+        });
         if let Some(command) = command {
             match command {
                 Command::Shutdown => {
@@ -796,6 +946,7 @@ fn run(
                                 .network
                                 .then(|| NatEngine::new(NatConfig::default()));
                             state.phase = Phase::Running;
+                            idle_parking = settings.idle_parking;
                             state.has_machine = true;
                             state.machine_name = Some(settings.machine_name());
                             state.machine_description = Some(settings.machine_description());
@@ -916,26 +1067,27 @@ fn run(
                     break;
                 }
             }
-        }
-        let bytes = m.bus.devices_mut().unwrap().serial.take_output(Channel::A);
-        if let Some(p) = &mut serial.pty {
-            p.send(&bytes);
-        }
-        if state.headless && !bytes.is_empty() {
-            state.waiting_for_console = false;
-        }
-        frame_cache.console.process(&bytes);
-        for byte in bytes {
-            match byte {
-                b'\n' => state.serial.push('\n'),
-                b'\r' => {}
-                0x20..=0x7e => state.serial.push(char::from(byte)),
-                _ => {}
+            let parking_candidate = idle_parking
+                && m.cpu.pc() == SOLARIS_IDLE_PC
+                && m.cpu.npc() == SOLARIS_IDLE_NPC
+                && m.cpu.psr() == SOLARIS_IDLE_PSR;
+            if parking_candidate {
+                drain_console(m, &mut state, &mut serial, &mut frame_cache);
+                let mut context = ParkContext {
+                    input: &input,
+                    receive: &receive,
+                    pending_command: &mut pending_command,
+                    serial: &mut serial,
+                    pending_keys: !pending_keys.is_empty(),
+                    network: &mut network,
+                    abort: &abort,
+                };
+                if try_park(m, &mut context) {
+                    break;
+                }
             }
         }
-        if state.serial.len() > 8192 {
-            state.serial.drain(..state.serial.len() - 8192);
-        }
+        drain_console(m, &mut state, &mut serial, &mut frame_cache);
         if frame_at.elapsed() >= Duration::from_millis(33) || state.phase != Phase::Running {
             if serial.pty.is_some() {
                 // A guest can reinitialize the receiver inside this CPU batch.
@@ -969,6 +1121,9 @@ fn run(
     state.shutdown_complete = true;
     *shared.lock().unwrap() = state;
 }
+
+#[cfg(test)]
+mod parking_tests;
 
 #[cfg(test)]
 mod tests {

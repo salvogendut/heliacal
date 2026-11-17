@@ -185,6 +185,9 @@ mod unix {
                     .copied(),
             );
         }
+        pub fn pending_input_output(&self) -> bool {
+            !self.input.is_empty() || !self.output.is_empty()
+        }
         pub fn poll(&mut self) -> Result<(), String> {
             let mut buf = [0; IO_BUDGET];
             let room = (QUEUE_LIMIT - self.input.len()).min(buf.len());
@@ -359,6 +362,9 @@ impl SerialPty {
         self.clear_input();
     }
     pub fn send(&mut self, _: &[u8]) {}
+    pub fn pending_input_output(&self) -> bool {
+        false
+    }
     pub fn poll(&mut self) -> Result<(), String> {
         Ok(())
     }

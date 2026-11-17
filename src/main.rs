@@ -96,6 +96,7 @@ struct Options {
     smoke: bool,
     boot_smoke: bool,
     screenshot: Option<PathBuf>,
+    idle_parking: Option<bool>,
 }
 impl Options {
     fn parse() -> Result<Option<Self>> {
@@ -117,6 +118,9 @@ impl Options {
         }
         if let Some(headless) = self.headless {
             settings.headless = headless;
+        }
+        if let Some(idle_parking) = self.idle_parking {
+            settings.idle_parking = idle_parking;
         }
         settings.validate_hardware()?;
         Ok(())
@@ -181,6 +185,7 @@ impl Options {
                 }
                 "--headless" => o.headless = Some(true),
                 "--graphical" => o.headless = Some(false),
+                "--idle-parking" => o.idle_parking = Some(true),
                 "--serial-pty-link" => {
                     o.serial_pty_link = Some(args.next().ok_or("--serial-pty-link needs a path")?)
                 }
@@ -1635,6 +1640,16 @@ mod tests {
                 "{args:?}"
             );
         }
+    }
+
+    #[test]
+    fn idle_parking_cli_is_explicitly_opt_in() {
+        let mut settings = Settings::default();
+        assert!(!settings.idle_parking);
+        options(&["--idle-parking"])
+            .apply_hardware(&mut settings)
+            .unwrap();
+        assert!(settings.idle_parking);
     }
 
     #[test]

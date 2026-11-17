@@ -184,6 +184,8 @@ pub struct Settings {
     pub scsi: [ScsiTarget; SCSI_TARGETS],
     pub disk_read_only: bool,
     pub network: bool,
+    /// Opt-in core idle parking; default off preserves the executed guest path.
+    pub idle_parking: bool,
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
@@ -216,6 +218,7 @@ impl Default for Settings {
             }),
             disk_read_only: false,
             network: true,
+            idle_parking: false,
             smoothing: false,
             scanlines: false,
             show_status: true,
@@ -702,6 +705,21 @@ display = "sx"
         let settings = Settings::load(&config).unwrap();
         assert_eq!(settings.machines["old"].ram_mib, RAM_MIB);
         assert!(settings.machines["old"].validate().is_ok());
+    }
+
+    #[test]
+    fn idle_parking_is_opt_in_roundtrips_and_is_not_a_hardware_reset_input() {
+        let base = Settings::default();
+        assert!(!base.idle_parking);
+        let enabled = Settings {
+            idle_parking: true,
+            ..base.clone()
+        };
+        assert!(base.hardware_eq(&enabled));
+        let roundtrip: Settings = toml::from_str("idle_parking = true").unwrap();
+        assert!(roundtrip.idle_parking);
+        let text = toml::to_string(&enabled).unwrap();
+        assert!(text.contains("idle_parking = true"));
     }
 
     #[test]
