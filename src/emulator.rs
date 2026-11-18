@@ -567,6 +567,8 @@ fn step_machine(machine: &mut Machine) -> Result<u8, SchedulerError> {
     }
 }
 
+const SERIAL_INPUT_GRACE: Duration = Duration::from_millis(40);
+
 #[derive(Default)]
 struct SerialBridge {
     pty: Option<SerialPty>,
@@ -574,8 +576,40 @@ struct SerialBridge {
     break_pending: bool,
     break_active: bool,
     break_until_step: u64,
+    input_grace_until: Option<Instant>,
 }
 impl SerialBridge {
+    fn note_input_delivery_at(&mut self, now: Instant) {
+        if !SERIAL_INPUT_GRACE.is_zero() {
+            self.input_grace_until = Some(now + SERIAL_INPUT_GRACE);
+        }
+    }
+
+    fn input_grace_active_at(&mut self, now: Instant) -> bool {
+        if SERIAL_INPUT_GRACE.is_zero() {
+            return false;
+        }
+        let Some(until) = self.input_grace_until else {
+            return false;
+        };
+        if now < until {
+            return true;
+        }
+        self.input_grace_until = None;
+        false
+    }
+
+    fn parking_blocked_by_input_grace(&mut self) -> bool {
+        if self.input_grace_until.is_none() {
+            return false;
+        }
+        self.input_grace_active_at(Instant::now())
+    }
+
+    fn clear_input_grace(&mut self) {
+        self.input_grace_until = None;
+    }
+
     fn sync_input(
         &mut self,
         machine: &Machine,
@@ -600,6 +634,7 @@ impl SerialBridge {
             self.epoch = epoch;
             self.break_active = false;
             self.break_pending = false;
+            self.clear_input_grace();
         }
         state.serial_input_generation = keys.serial.generation();
     }
@@ -618,6 +653,7 @@ impl SerialBridge {
         self.sync_input(machine, running, state, &mut keys);
         let pty = self.pty.as_mut().unwrap();
         let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        let mut delivered = false;
         if let Err(error) = pty.poll() {
             state.serial_error = Some(error);
         }
@@ -659,7 +695,11 @@ impl SerialBridge {
                 } else {
                     pty.input.pop_front();
                 }
+                delivered = true;
             }
+        }
+        if delivered {
+            self.note_input_delivery_at(Instant::now());
         }
     }
 }
@@ -712,7 +752,10 @@ fn host_work_pending(context: &mut ParkContext<'_>) -> bool {
 
 #[cfg_attr(feature = "parking-profile", allow(dead_code))]
 fn prepare_park(machine: &Machine, context: &mut ParkContext<'_>) -> Option<ParkPlan> {
-    if context.serial.break_pending || context.serial.break_active {
+    if context.serial.break_pending
+        || context.serial.break_active
+        || context.serial.parking_blocked_by_input_grace()
+    {
         return None;
     }
     if !solaris_idle_boundary(machine.cpu.pc(), machine.cpu.npc(), machine.cpu.psr()) {
@@ -804,6 +847,9 @@ fn prepare_park_profiled(
         if let Some(profile) = profile.as_mut() {
             profile.prep_break += 1;
         }
+        return None;
+    }
+    if context.serial.parking_blocked_by_input_grace() {
         return None;
     }
     if !solaris_idle_boundary(machine.cpu.pc(), machine.cpu.npc(), machine.cpu.psr()) {
@@ -1037,6 +1083,7 @@ fn run(
                         state.shutdown_failed = true;
                         if state.phase == Phase::Running {
                             state.phase = Phase::Paused;
+                            serial.clear_input_grace();
                         }
                         publish(m, &mut state, &shared, &mut frame_cache);
                         continue;
@@ -1057,6 +1104,9 @@ fn run(
                         Phase::Paused => Phase::Running,
                         other => other,
                     };
+                    if state.phase == Phase::Paused {
+                        serial.clear_input_grace();
+                    }
                 }
                 Command::Boot(settings) => {
                     let old_phase = state.phase;
@@ -1113,6 +1163,7 @@ fn run(
                                 new.bus.devices().unwrap().serial.receiver_epoch(Channel::A);
                             serial.break_pending = false;
                             serial.break_active = false;
+                            serial.clear_input_grace();
                             state.headless = settings.headless;
                             state.serial_error = None;
                             state.serial_dropped = 0;
@@ -1274,12 +1325,14 @@ fn run(
                     }
                 }
                 Err(SchedulerError::Cpu { fault, .. }) if fault.is_power_off() => {
+                    serial.clear_input_grace();
                     state.phase = Phase::Stopped;
                     state.error = None;
                     state.serial.push_str("\nSystem powered off.\n");
                     break;
                 }
                 Err(error) => {
+                    serial.clear_input_grace();
                     state.phase = Phase::Failed;
                     state.error = Some(format!("Helios stopped: {error}"));
                     eprintln!("{}", state.error.as_ref().unwrap());

@@ -3,10 +3,18 @@
 ## Experimental idle parking
 
 `idle_parking` defaults to `false`; `--idle-parking` enables it for the next
-boot. It is scoped to a single-CPU SS-20 Solaris idle boundary, reduces measured
-idle worker CPU by roughly 69–80%, and adds roughly 6–11 ms median command
-response latency in the current measurements. All proof, wakeup and 2 ms wait
-limits remain active. Treat it as an experimental default-off setting.
+boot. It is scoped to a single-CPU SS-20 Solaris idle boundary and reduces
+measured idle worker CPU by roughly 69–80%. Parking is suppressed for 40 ms
+after each successfully delivered serial byte, renewed only by another
+successful delivery. This keeps measured command and character responses
+responsive, but continuous serial input can keep the worker at full CPU:
+observed command-phase usage was about 99–101%, versus 30–33% for parked
+control without the grace. Quiet input returned to roughly 6.8–8.8% settled
+idle CPU and improved command medians by about 12 ms over parking without the
+grace. The grace expires unconditionally without waiting for echo or output.
+All proof, wakeup and 2 ms wait limits remain active. Treat it as an
+experimental default-off setting; the measurements are not universal latency
+or CPU guarantees.
 
 [Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
 

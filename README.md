@@ -58,11 +58,17 @@ These captures come from the [recorded guest checks](docs/testing.md#recorded-gu
 
 `--idle-parking` (or `idle_parking = true` in the config) is default-off and
 limited to a single-CPU SS-20 running the validated Solaris idle-loop boundary.
-It substantially reduces idle worker CPU in measured runs (roughly 69–80%),
-but adds an observed command-response cost of roughly 6–11 ms median. The
-other parking safeguards, including the 2 ms wait cap and full CPU/MMU/device
-proof, remain in force. Do not enable it for latency-sensitive use without
-rechecking the current measurements.
+It substantially reduces idle worker CPU in measured runs (roughly 69–80%).
+After each successfully delivered serial byte, parking is suppressed for
+40 ms so command and character responses stay responsive. Continuous serial
+input can therefore keep the worker fully active: measured command-phase CPU
+was roughly 99–101%, versus 30–33% for parked control, an intentional
+responsiveness tradeoff. With quiet input, settled idle CPU remained around
+6.8–8.8%, and command medians improved by about 12 ms over parking without
+the grace. The 40 ms grace expires unconditionally, including when terminal
+echo or other output is absent; it does not require an echo acknowledgement.
+The 2 ms wait cap and full CPU/MMU/device proof remain in force. These are
+workload measurements, not latency or CPU guarantees for every host or guest.
 
 ## Build and run
 

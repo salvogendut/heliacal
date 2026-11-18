@@ -644,3 +644,148 @@ fn review_frontend_cwp_profile_matches_ordinary_wait_and_wakeup() {
         );
     }
 }
+
+#[test]
+fn input_grace_renews_only_for_new_delivery_and_expires_without_output() {
+    let mut serial = SerialBridge::default();
+    let base = Instant::now();
+    serial.note_input_delivery_at(base);
+    assert!(serial.input_grace_active_at(base + Duration::from_millis(39)));
+    assert!(!serial.input_grace_active_at(base + Duration::from_millis(40)));
+
+    serial.note_input_delivery_at(base + Duration::from_millis(30));
+    assert!(serial.input_grace_active_at(base + Duration::from_millis(69)));
+    assert!(!serial.input_grace_active_at(base + Duration::from_millis(70)));
+}
+
+#[test]
+fn unrelated_console_output_does_not_extend_input_grace() {
+    let mut machine = idle_machine();
+    {
+        let serial = &mut machine.bus.devices_mut().unwrap().serial;
+        serial.write(4, 14).unwrap();
+        serial.write(4, 3).unwrap();
+        serial.write(6, b'Z').unwrap();
+        serial.write(4, 5).unwrap();
+        serial.write(4, 0x68).unwrap();
+    }
+    let base = Instant::now();
+    let mut bridge = SerialBridge::default();
+    bridge.note_input_delivery_at(base);
+    let mut state = Snapshot::default();
+    let mut frame_cache = FrameCache::default();
+    drain_console(&mut machine, &mut state, &mut bridge, &mut frame_cache);
+    assert!(state.serial.contains('Z'));
+    assert!(bridge.input_grace_active_at(base + Duration::from_millis(39)));
+    assert!(!bridge.input_grace_active_at(base + Duration::from_millis(40)));
+}
+
+#[test]
+fn input_grace_blocks_ordinary_parking_until_expiry() {
+    let machine = idle_machine();
+    let input = Mutex::new(Input::default());
+    let (_send, receive) = mpsc::sync_channel(4);
+    let mut pending_command = None;
+    let mut serial = SerialBridge::default();
+    let mut network = None;
+    let abort = AtomicBool::new(false);
+    serial.input_grace_until = Some(Instant::now() + Duration::from_millis(40));
+    {
+        let mut cx = context(
+            &input,
+            &receive,
+            &mut pending_command,
+            &mut serial,
+            &mut network,
+            &abort,
+        );
+        assert!(prepare_park(&machine, &mut cx).is_none());
+    }
+    serial.input_grace_until = Some(Instant::now() - Duration::from_millis(1));
+    let mut cx = context(
+        &input,
+        &receive,
+        &mut pending_command,
+        &mut serial,
+        &mut network,
+        &abort,
+    );
+    assert!(prepare_park(&machine, &mut cx).is_some());
+    assert!(serial.input_grace_until.is_none());
+}
+
+#[cfg(feature = "parking-profile")]
+#[test]
+fn input_grace_blocks_ordinary_and_profiled_parking_alike() {
+    let mut ordinary = ProfileHarness::new();
+    ordinary.use_profiled = false;
+    ordinary.profile = None;
+    let mut profiled = ProfileHarness::new();
+    for harness in [&mut ordinary, &mut profiled] {
+        harness.serial.input_grace_until = Some(Instant::now() + Duration::from_millis(40));
+        assert!(harness.prepare().is_none());
+        harness.serial.input_grace_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(harness.prepare().is_some());
+        assert!(harness.serial.input_grace_until.is_none());
+    }
+}
+
+#[test]
+fn input_grace_is_cleared_for_machine_and_stop_lifecycle_resets() {
+    let mut serial = SerialBridge {
+        input_grace_until: Some(Instant::now() + Duration::from_millis(40)),
+        ..SerialBridge::default()
+    };
+    assert!(serial.parking_blocked_by_input_grace());
+    serial.clear_input_grace();
+    assert!(!serial.parking_blocked_by_input_grace());
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_input_delivery_sets_grace_and_rejected_delivery_does_not() {
+    let mut machine = Machine::ss5(8 << 20, &[0; 4]).unwrap();
+    let serial = &mut machine.bus.devices_mut().unwrap().serial;
+    serial.write(4, 4).unwrap();
+    serial.write(4, 0x44).unwrap();
+    serial.write(4, 3).unwrap();
+    serial.write(4, 0xc1).unwrap();
+    for byte in [1, 2, 3] {
+        assert!(serial.receive(Channel::A, byte));
+    }
+    let mut bridge = SerialBridge {
+        pty: Some(SerialPty::open("").unwrap()),
+        epoch: serial.receiver_epoch(Channel::A),
+        ..SerialBridge::default()
+    };
+    bridge.pty.as_mut().unwrap().input.extend(b"x");
+    let input = Mutex::new(Input::default());
+    let mut state = Snapshot::default();
+    bridge.service(&mut machine, true, &mut state, &input);
+    assert!(bridge.input_grace_until.is_none());
+    assert_eq!(bridge.pty.as_ref().unwrap().input.front(), Some(&b'x'));
+
+    for expected in [1, 2, 3] {
+        assert_eq!(
+            machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+            expected
+        );
+    }
+    bridge.service(&mut machine, true, &mut state, &input);
+    assert!(bridge.input_grace_until.is_some());
+    assert!(bridge.pty.as_ref().unwrap().input.is_empty());
+    assert_eq!(
+        machine.bus.devices_mut().unwrap().serial.read(6).unwrap(),
+        b'x'
+    );
+    bridge.service(&mut machine, true, &mut state, &input);
+    assert!(bridge.pty.as_ref().unwrap().input.is_empty());
+
+    let before_reset = bridge.input_grace_until;
+    let serial = &mut machine.bus.devices_mut().unwrap().serial;
+    serial.write(4, 3).unwrap();
+    serial.write(4, 0xc1).unwrap();
+    bridge.service(&mut machine, false, &mut state, &input);
+    assert!(before_reset.is_some());
+    assert!(bridge.input_grace_until.is_none());
+}
