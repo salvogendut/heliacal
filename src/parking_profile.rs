@@ -53,13 +53,15 @@ pub struct ParkingProfile {
 }
 
 impl ParkingProfile {
-    pub fn from_env() -> Option<Self> {
-        let path = std::env::var_os(PROFILE_ENV).map(PathBuf::from)?;
-        let reset_path = std::env::var_os(RESET_ENV).map(PathBuf::from);
-        let dump_path = std::env::var_os(DUMP_ENV).map(PathBuf::from);
-        let toggle_path = std::env::var_os(TOGGLE_ENV).map(PathBuf::from);
+    fn new(
+        path: PathBuf,
+        reset_path: Option<PathBuf>,
+        dump_path: Option<PathBuf>,
+        toggle_path: Option<PathBuf>,
+    ) -> Self {
+        helios::parking_profile::reset();
         let now = Instant::now();
-        Some(Self {
+        Self {
             path,
             reset_path,
             dump_path,
@@ -99,7 +101,22 @@ impl ParkingProfile {
             control_ns: 0,
             committed_virtual_ns: 0,
             oversleep_ns: 0,
-        })
+        }
+    }
+
+    pub fn from_env() -> Option<Self> {
+        let path = std::env::var_os(PROFILE_ENV).map(PathBuf::from)?;
+        Some(Self::new(
+            path,
+            std::env::var_os(RESET_ENV).map(PathBuf::from),
+            std::env::var_os(DUMP_ENV).map(PathBuf::from),
+            std::env::var_os(TOGGLE_ENV).map(PathBuf::from),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_review() -> Option<Self> {
+        Some(Self::new(PathBuf::from("/dev/null"), None, None, None))
     }
 
     pub fn maybe_reset(&mut self) {
@@ -122,6 +139,7 @@ impl ParkingProfile {
             return;
         };
         if fs::remove_file(path).is_ok() {
+            helios::parking_profile::reset();
             self.started = now;
             self.outer_loops = 0;
             self.instructions = 0;
@@ -240,6 +258,79 @@ impl ParkingProfile {
         let _ = writeln!(text, "    \"console_output\": {},", self.output_ns);
         let _ = writeln!(text, "    \"publish\": {},", self.publish_ns);
         let _ = writeln!(text, "    \"control\": {}", self.control_ns);
+        let _ = writeln!(text, "  }},");
+        let core = helios::parking_profile::snapshot();
+        let _ = writeln!(text, "  \"core\": {{");
+        let _ = writeln!(text, "    \"token_success\": {},", core.token_success);
+        let _ = writeln!(text, "    \"token_rejected\": {},", core.token_rejected);
+        let _ = writeln!(text, "    \"token_success_ns\": {},", core.token_success_ns);
+        let _ = writeln!(
+            text,
+            "    \"token_rejected_ns\": {},",
+            core.token_rejected_ns
+        );
+        let _ = writeln!(text, "    \"token_ns\": {},", core.token_ns);
+        let _ = writeln!(text, "    \"validate_success\": {},", core.validate_success);
+        let _ = writeln!(
+            text,
+            "    \"validate_rejected\": {},",
+            core.validate_rejected
+        );
+        let _ = writeln!(
+            text,
+            "    \"validate_success_ns\": {},",
+            core.validate_success_ns
+        );
+        let _ = writeln!(
+            text,
+            "    \"validate_rejected_ns\": {},",
+            core.validate_rejected_ns
+        );
+        let _ = writeln!(text, "    \"validate_ns\": {},", core.validate_ns);
+        let _ = writeln!(text, "    \"advance_success\": {},", core.advance_success);
+        let _ = writeln!(text, "    \"advance_rejected\": {},", core.advance_rejected);
+        let _ = writeln!(
+            text,
+            "    \"advance_success_ns\": {},",
+            core.advance_success_ns
+        );
+        let _ = writeln!(
+            text,
+            "    \"advance_rejected_ns\": {},",
+            core.advance_rejected_ns
+        );
+        let _ = writeln!(text, "    \"advance_ns\": {},", core.advance_ns);
+        let _ = writeln!(text, "    \"proof_ok\": {},", core.proof_ok);
+        let _ = writeln!(text, "    \"proof_failed\": {},", core.proof_failed);
+        let _ = writeln!(text, "    \"proof_ns\": {},", core.proof_ns);
+        let _ = writeln!(text, "    \"readiness_ok\": {},", core.readiness_ok);
+        let _ = writeln!(text, "    \"readiness_failed\": {},", core.readiness_failed);
+        let _ = writeln!(text, "    \"readiness_ns\": {},", core.readiness_ns);
+        let _ = writeln!(text, "    \"digest_calls\": {},", core.digest_calls);
+        let _ = writeln!(text, "    \"digest_ns\": {},", core.digest_ns);
+        let _ = writeln!(
+            text,
+            "    \"arbitration_calls\": {},",
+            core.arbitration_calls
+        );
+        let _ = writeln!(text, "    \"arbitration_ns\": {},", core.arbitration_ns);
+        let _ = writeln!(text, "    \"snapshot_calls\": {},", core.snapshot_calls);
+        let _ = writeln!(text, "    \"snapshot_ns\": {},", core.snapshot_ns);
+        let _ = writeln!(text, "    \"snapshot_eq_ok\": {},", core.snapshot_eq_ok);
+        let _ = writeln!(
+            text,
+            "    \"snapshot_eq_failed\": {},",
+            core.snapshot_eq_failed
+        );
+        let _ = writeln!(text, "    \"snapshot_eq_ns\": {},", core.snapshot_eq_ns);
+        let _ = writeln!(text, "    \"deadline_calls\": {},", core.deadline_calls);
+        let _ = writeln!(text, "    \"deadline_ns\": {},", core.deadline_ns);
+        let _ = writeln!(
+            text,
+            "    \"advancement_calls\": {},",
+            core.advancement_calls
+        );
+        let _ = writeln!(text, "    \"advancement_ns\": {}", core.advancement_ns);
         let _ = writeln!(text, "  }}");
         let _ = writeln!(text, "}}");
         if let Err(error) = fs::write(&self.path, text) {

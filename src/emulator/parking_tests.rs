@@ -272,3 +272,197 @@ fn console_output_is_drained_before_parking_can_wait() {
     drain_console(&mut machine, &mut state, &mut serial, &mut frame_cache);
     assert!(state.serial.contains('Z'));
 }
+
+#[cfg(feature = "parking-profile")]
+struct ProfileHarness {
+    use_profiled: bool,
+    machine: Machine,
+    input: Mutex<Input>,
+    receive: mpsc::Receiver<Command>,
+    send: mpsc::SyncSender<Command>,
+    command: Option<Command>,
+    serial: SerialBridge,
+    network: Option<NatEngine>,
+    profile: Option<ParkingProfile>,
+    abort: AtomicBool,
+}
+
+#[cfg(feature = "parking-profile")]
+impl ProfileHarness {
+    fn new() -> Self {
+        let (send, receive) = mpsc::sync_channel(8);
+        Self {
+            use_profiled: true,
+            machine: idle_machine(),
+            input: Mutex::new(Input::default()),
+            receive,
+            send,
+            command: None,
+            serial: SerialBridge::default(),
+            network: None,
+            profile: ParkingProfile::for_review(),
+            abort: AtomicBool::new(false),
+        }
+    }
+
+    fn prepare(&mut self) -> Option<ParkPlan> {
+        let mut context = ParkContext {
+            input: &self.input,
+            receive: &self.receive,
+            pending_command: &mut self.command,
+            serial: &mut self.serial,
+            pending_keys: false,
+            network: &mut self.network,
+            abort: &self.abort,
+        };
+        if self.use_profiled {
+            prepare_park_profiled(&self.machine, &mut context, &mut self.profile)
+        } else {
+            prepare_park(&self.machine, &mut context)
+        }
+    }
+
+    fn commit(
+        &mut self,
+        plan: ParkPlan,
+        elapsed: Duration,
+        mut wait: impl FnMut(Duration, &Mutex<Input>, &mpsc::SyncSender<Command>),
+    ) -> Option<helios::machine::ParkedAdvance> {
+        let mut context = ParkContext {
+            input: &self.input,
+            receive: &self.receive,
+            pending_command: &mut self.command,
+            serial: &mut self.serial,
+            pending_keys: false,
+            network: &mut self.network,
+            abort: &self.abort,
+        };
+        if !self.use_profiled {
+            return commit_park_with(
+                &mut self.machine,
+                plan,
+                &mut context,
+                |duration| wait(duration, &self.input, &self.send),
+                || elapsed,
+            );
+        }
+        commit_park_with_profiled(
+            &mut self.machine,
+            plan,
+            &mut context,
+            &mut self.profile,
+            |duration| wait(duration, &self.input, &self.send),
+            || elapsed,
+        )
+    }
+}
+
+#[cfg(feature = "parking-profile")]
+#[test]
+fn profiling_does_not_change_successful_parked_state() {
+    let mut off = ProfileHarness::new();
+    off.profile = None;
+    off.use_profiled = false;
+    let mut on = ProfileHarness::new();
+    let before = off
+        .machine
+        .diagnostic_snapshot()
+        .differences(&on.machine.diagnostic_snapshot());
+    assert!(before.is_empty(), "{before:?}");
+    let a = off.prepare().unwrap();
+    let b = on.prepare().unwrap();
+    let off_result = off
+        .commit(a, Duration::from_millis(1), |_, _, _| {})
+        .unwrap();
+    let on_result = on
+        .commit(b, Duration::from_millis(1), |_, _, _| {})
+        .unwrap();
+    assert_eq!(off_result, on_result);
+    let after = off
+        .machine
+        .diagnostic_snapshot()
+        .differences(&on.machine.diagnostic_snapshot());
+    assert!(after.is_empty(), "{after:?}");
+    let profile = on.profile.as_ref().unwrap();
+    assert_eq!(
+        (
+            profile.token_calls,
+            profile.prepared,
+            profile.wait_calls,
+            profile.validations,
+            profile.committed,
+        ),
+        (1, 1, 1, 1, 1)
+    );
+    assert_eq!(profile.host_checks, 3);
+    assert_eq!(profile.wait_requested_ns, 2_000_000);
+    assert_eq!(profile.committed_virtual_ns, 1_000_000);
+    assert_eq!(profile.oversleep_ns, 0);
+    assert!(profile.token_ns > 0 && profile.validation_ns > 0);
+}
+
+#[cfg(feature = "parking-profile")]
+#[test]
+fn profiling_does_not_change_input_cancellation() {
+    let mut off = ProfileHarness::new();
+    off.profile = None;
+    off.use_profiled = false;
+    let mut on = ProfileHarness::new();
+    for harness in [&mut off, &mut on] {
+        let plan = harness.prepare().unwrap();
+        let result = harness.commit(plan, Duration::from_millis(1), |_, input, _| {
+            let mut keys = input.lock().unwrap();
+            keys.serial.enable(true);
+            keys.serial.push(0, b"x").unwrap();
+        });
+        assert!(result.is_none());
+        assert_eq!(harness.machine.virtual_ns(), 0);
+        assert_eq!(harness.input.lock().unwrap().serial.front(), Some(b'x'));
+    }
+    let differences = off
+        .machine
+        .diagnostic_snapshot()
+        .differences(&on.machine.diagnostic_snapshot());
+    assert!(differences.is_empty(), "{differences:?}");
+    let profile = on.profile.as_ref().unwrap();
+    assert_eq!(
+        (
+            profile.post_host_work,
+            profile.wait_calls,
+            profile.validations,
+            profile.committed,
+        ),
+        (1, 1, 0, 0)
+    );
+}
+
+#[cfg(feature = "parking-profile")]
+#[test]
+fn profiling_does_not_change_stale_token_rejection() {
+    let mut off = ProfileHarness::new();
+    off.profile = None;
+    off.use_profiled = false;
+    let mut on = ProfileHarness::new();
+    for harness in [&mut off, &mut on] {
+        let plan = harness.prepare().unwrap();
+        harness.machine.cpu.write_reg(1, 0x1234);
+        let result = harness.commit(plan, Duration::from_millis(1), |_, _, _| {});
+        assert!(result.is_none());
+        assert_eq!(harness.machine.virtual_ns(), 0);
+    }
+    let differences = off
+        .machine
+        .diagnostic_snapshot()
+        .differences(&on.machine.diagnostic_snapshot());
+    assert!(differences.is_empty(), "{differences:?}");
+    let profile = on.profile.as_ref().unwrap();
+    assert_eq!(
+        (
+            profile.post_validation,
+            profile.wait_calls,
+            profile.validations,
+            profile.committed,
+        ),
+        (1, 1, 1, 0)
+    );
+}

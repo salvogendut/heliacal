@@ -7,7 +7,7 @@ description = "A Happy Years desktop frontend for the Helios SPARC emulator"
 
 [features]
 default = []
-parking-profile = []
+parking-profile = ["helios/parking-profile"]
 
 [dependencies]
 helios = { path = "../helios", features = ["chd", "host-icmp"] }
