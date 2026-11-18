@@ -1,5 +1,13 @@
 # Configuration and saved state
 
+## Experimental idle parking
+
+`idle_parking` defaults to `false`; `--idle-parking` enables it for the next
+boot. It is scoped to a single-CPU SS-20 Solaris idle boundary, reduces measured
+idle worker CPU by roughly 69–80%, and adds roughly 6–11 ms median command
+response latency in the current measurements. All proof, wakeup and 2 ms wait
+limits remain active. Treat it as an experimental default-off setting.
+
 [Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
 
 The default config is `heliacal.cfg` under:

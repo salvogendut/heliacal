@@ -466,3 +466,181 @@ fn profiling_does_not_change_stale_token_rejection() {
         (1, 1, 1, 0)
     );
 }
+
+// Included at the end of src/emulator/parking_tests.rs in the isolated copy.
+fn review_window_machine(cwp: u32) -> Machine {
+    let mut machine = idle_machine();
+    machine.bus.write32(0x2000, 0x8188_6000).unwrap();
+    machine.cpu.write_reg(1, SOLARIS_IDLE_PSR | cwp);
+    machine.cpu.set_pc_npc(0xf000_2000, 0xf000_2004);
+    assert!(matches!(
+        machine.cpu.step(&mut machine.bus).unwrap(),
+        Step::Executed {
+            instruction: 0x8188_6000,
+            ..
+        }
+    ));
+    for (reg, value) in [
+        (8, 0xf025_f800),
+        (24, 0xf026_de48),
+        (15, 0xf006_fa58),
+        (16, 0xf007_1708),
+    ] {
+        machine.cpu.write_reg(reg, value);
+    }
+    machine.cpu.set_pc_npc(SOLARIS_IDLE_PC, SOLARIS_IDLE_NPC);
+    for _ in 0..14 {
+        assert!(matches!(
+            machine.cpu.step(&mut machine.bus).unwrap(),
+            Step::Executed { .. }
+        ));
+    }
+    assert_eq!(machine.cpu.pc(), SOLARIS_IDLE_PC);
+    assert_eq!(machine.cpu.npc(), SOLARIS_IDLE_NPC);
+    assert_eq!(machine.cpu.psr(), SOLARIS_IDLE_PSR | cwp);
+    machine
+}
+
+#[test]
+fn review_frontend_cwp_ordinary_wait_commit_input_and_break() {
+    for cwp in [0, 7] {
+        let mut machine = review_window_machine(cwp);
+        let input = Mutex::new(Input::default());
+        let (_send, receive) = mpsc::sync_channel(4);
+        let mut command = None;
+        let mut serial = SerialBridge::default();
+        let mut network = None;
+        let abort = AtomicBool::new(false);
+        let before = machine.diagnostic_snapshot();
+        let before_ns = machine.virtual_ns();
+        {
+            let mut cx = context(
+                &input,
+                &receive,
+                &mut command,
+                &mut serial,
+                &mut network,
+                &abort,
+            );
+            let plan = prepare_park(&machine, &mut cx).expect("ordinary CWP plan");
+            assert_eq!(plan.wait_ns, 2_000_000);
+            assert_eq!(machine.virtual_ns(), before_ns);
+            let advance = commit_park_with(
+                &mut machine,
+                plan,
+                &mut cx,
+                |_| {},
+                || Duration::from_millis(1),
+            )
+            .unwrap();
+            assert_eq!(advance.advanced_ns, 1_000_000);
+        }
+        assert_eq!(machine.virtual_ns(), before_ns + 1_000_000);
+        assert_eq!(machine.cpu, before.cpu);
+
+        let before_input = machine.virtual_ns();
+        {
+            let mut cx = context(
+                &input,
+                &receive,
+                &mut command,
+                &mut serial,
+                &mut network,
+                &abort,
+            );
+            let plan = prepare_park(&machine, &mut cx).unwrap();
+            let result = commit_park_with(
+                &mut machine,
+                plan,
+                &mut cx,
+                |_| input.lock().unwrap().queue.push_back((1, true)),
+                || Duration::from_millis(1),
+            );
+            assert!(result.is_none());
+            assert!(prepare_park(&machine, &mut cx).is_none());
+        }
+        assert_eq!(machine.virtual_ns(), before_input);
+        assert_eq!(input.lock().unwrap().queue.pop_front(), Some((1, true)));
+        for (pending, active) in [(true, false), (false, true)] {
+            serial.break_pending = pending;
+            serial.break_active = active;
+            let mut cx = context(
+                &input,
+                &receive,
+                &mut command,
+                &mut serial,
+                &mut network,
+                &abort,
+            );
+            assert!(prepare_park(&machine, &mut cx).is_none());
+        }
+        assert_eq!(machine.virtual_ns(), before_input);
+    }
+}
+
+#[cfg(feature = "parking-profile")]
+#[test]
+fn review_frontend_cwp_profile_matches_ordinary_wait_and_wakeup() {
+    for cwp in [0, 7] {
+        let mut ordinary = ProfileHarness::new();
+        ordinary.use_profiled = false;
+        ordinary.profile = None;
+        ordinary.machine = review_window_machine(cwp);
+        let mut profiled = ProfileHarness::new();
+        profiled.machine = review_window_machine(cwp);
+        assert!(
+            ordinary
+                .machine
+                .diagnostic_snapshot()
+                .differences(&profiled.machine.diagnostic_snapshot())
+                .is_empty()
+        );
+        let a = ordinary.prepare().unwrap();
+        let b = profiled.prepare().unwrap();
+        assert_eq!(a.wait_ns, b.wait_ns);
+        let a = ordinary
+            .commit(a, Duration::from_millis(1), |_, _, _| {})
+            .unwrap();
+        let b = profiled
+            .commit(b, Duration::from_millis(1), |_, _, _| {})
+            .unwrap();
+        assert_eq!(a, b);
+        assert!(
+            ordinary
+                .machine
+                .diagnostic_snapshot()
+                .differences(&profiled.machine.diagnostic_snapshot())
+                .is_empty()
+        );
+
+        for harness in [&mut ordinary, &mut profiled] {
+            let before = harness.machine.virtual_ns();
+            let plan = harness.prepare().unwrap();
+            assert!(
+                harness
+                    .commit(plan, Duration::from_millis(1), |_, input, _| {
+                        input.lock().unwrap().queue.push_back((1, true));
+                    })
+                    .is_none()
+            );
+            assert!(harness.prepare().is_none());
+            assert_eq!(harness.machine.virtual_ns(), before);
+            assert_eq!(
+                harness.input.lock().unwrap().queue.pop_front(),
+                Some((1, true))
+            );
+            for (pending, active) in [(true, false), (false, true)] {
+                harness.serial.break_pending = pending;
+                harness.serial.break_active = active;
+                assert!(harness.prepare().is_none());
+            }
+        }
+        assert!(
+            ordinary
+                .machine
+                .diagnostic_snapshot()
+                .differences(&profiled.machine.diagnostic_snapshot())
+                .is_empty()
+        );
+    }
+}

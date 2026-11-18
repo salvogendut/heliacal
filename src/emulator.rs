@@ -10,7 +10,7 @@ use helios::{
         serial::Channel,
     },
     firmware::{FirmwareImage, FirmwareKind, OpenBiosConfig},
-    machine::{Machine, SOLARIS_IDLE_NPC, SOLARIS_IDLE_PC, SOLARIS_IDLE_PSR, SchedulerError},
+    machine::{Machine, SchedulerError, solaris_idle_boundary},
     net::{NatConfig, NatEngine},
 };
 use std::{
@@ -715,10 +715,7 @@ fn prepare_park(machine: &Machine, context: &mut ParkContext<'_>) -> Option<Park
     if context.serial.break_pending || context.serial.break_active {
         return None;
     }
-    if machine.cpu.pc() != SOLARIS_IDLE_PC
-        || machine.cpu.npc() != SOLARIS_IDLE_NPC
-        || machine.cpu.psr() != SOLARIS_IDLE_PSR
-    {
+    if !solaris_idle_boundary(machine.cpu.pc(), machine.cpu.npc(), machine.cpu.psr()) {
         return None;
     }
     if host_work_pending(context) {
@@ -809,10 +806,7 @@ fn prepare_park_profiled(
         }
         return None;
     }
-    if machine.cpu.pc() != SOLARIS_IDLE_PC
-        || machine.cpu.npc() != SOLARIS_IDLE_NPC
-        || machine.cpu.psr() != SOLARIS_IDLE_PSR
-    {
+    if !solaris_idle_boundary(machine.cpu.pc(), machine.cpu.npc(), machine.cpu.psr()) {
         return None;
     }
     if host_work_pending_profiled(context, profile) {
@@ -1292,10 +1286,8 @@ fn run(
                     break;
                 }
             }
-            let parking_candidate = idle_parking
-                && m.cpu.pc() == SOLARIS_IDLE_PC
-                && m.cpu.npc() == SOLARIS_IDLE_NPC
-                && m.cpu.psr() == SOLARIS_IDLE_PSR;
+            let parking_candidate =
+                idle_parking && solaris_idle_boundary(m.cpu.pc(), m.cpu.npc(), m.cpu.psr());
             if parking_candidate {
                 #[cfg(feature = "parking-profile")]
                 if let Some(profile) = profile.as_mut()

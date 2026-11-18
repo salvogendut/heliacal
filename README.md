@@ -54,6 +54,16 @@ SX/CG14 graphics and 128 MiB RAM:
 
 These captures come from the [recorded guest checks](docs/testing.md#recorded-guest-checks).
 
+## Experimental idle parking
+
+`--idle-parking` (or `idle_parking = true` in the config) is default-off and
+limited to a single-CPU SS-20 running the validated Solaris idle-loop boundary.
+It substantially reduces idle worker CPU in measured runs (roughly 69–80%),
+but adds an observed command-response cost of roughly 6–11 ms median. The
+other parking safeguards, including the 2 ms wait cap and full CPU/MMU/device
+proof, remain in force. Do not enable it for latency-sensitive use without
+rechecking the current measurements.
+
 ## Build and run
 
 Keep the source checkouts alongside each other:
