@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 description = "A Happy Years desktop frontend for the Helios SPARC emulator"
 
+[features]
+default = []
+parking-profile = []
+
 [dependencies]
 helios = { path = "../helios", features = ["chd", "host-icmp"] }
 sdl3 = "0.20"

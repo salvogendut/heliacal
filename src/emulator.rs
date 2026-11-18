@@ -1,3 +1,5 @@
+#[cfg(feature = "parking-profile")]
+use crate::parking_profile::{ParkingProfile, nanos};
 use crate::serial_pty::SerialPty;
 use crate::settings::{Display, Model, SCSI_TARGETS, Settings, TargetKind, atomic_write};
 use helios::{
@@ -708,6 +710,7 @@ fn host_work_pending(context: &mut ParkContext<'_>) -> bool {
     pty.pending_input_output()
 }
 
+#[cfg_attr(feature = "parking-profile", allow(dead_code))]
 fn prepare_park(machine: &Machine, context: &mut ParkContext<'_>) -> Option<ParkPlan> {
     if context.serial.break_pending || context.serial.break_active {
         return None;
@@ -734,6 +737,7 @@ fn prepare_park(machine: &Machine, context: &mut ParkContext<'_>) -> Option<Park
     Some(ParkPlan { token, wait_ns })
 }
 
+#[cfg_attr(feature = "parking-profile", allow(dead_code))]
 fn commit_park(
     machine: &mut Machine,
     plan: ParkPlan,
@@ -743,6 +747,7 @@ fn commit_park(
     commit_park_with(machine, plan, context, thread::sleep, || started.elapsed())
 }
 
+#[cfg_attr(feature = "parking-profile", allow(dead_code))]
 fn commit_park_with(
     machine: &mut Machine,
     plan: ParkPlan,
@@ -770,12 +775,189 @@ fn commit_park_with(
     machine.advance_parked(plan.token, elapsed_ns).ok()
 }
 
+#[cfg_attr(feature = "parking-profile", allow(dead_code))]
 fn try_park(machine: &mut Machine, context: &mut ParkContext<'_>) -> bool {
     let Some(plan) = prepare_park(machine, context) else {
         return false;
     };
     commit_park(machine, plan, context).is_some()
 }
+
+#[cfg(feature = "parking-profile")]
+fn host_work_pending_profiled(
+    context: &mut ParkContext<'_>,
+    profile: &mut Option<ParkingProfile>,
+) -> bool {
+    let started = profile.as_ref().and_then(ParkingProfile::timer);
+    let pending = host_work_pending(context);
+    if let (Some(profile), Some(started)) = (profile.as_mut(), started) {
+        profile.host_checks += 1;
+        profile.host_check_ns += nanos(started.elapsed());
+    }
+    pending
+}
+
+#[cfg(feature = "parking-profile")]
+fn prepare_park_profiled(
+    machine: &Machine,
+    context: &mut ParkContext<'_>,
+    profile: &mut Option<ParkingProfile>,
+) -> Option<ParkPlan> {
+    if context.serial.break_pending || context.serial.break_active {
+        if let Some(profile) = profile.as_mut() {
+            profile.prep_break += 1;
+        }
+        return None;
+    }
+    if machine.cpu.pc() != SOLARIS_IDLE_PC
+        || machine.cpu.npc() != SOLARIS_IDLE_NPC
+        || machine.cpu.psr() != SOLARIS_IDLE_PSR
+    {
+        return None;
+    }
+    if host_work_pending_profiled(context, profile) {
+        if let Some(profile) = profile.as_mut() {
+            profile.prep_host_work += 1;
+        }
+        return None;
+    }
+    let now = machine.virtual_ns();
+    let next = machine.timebase().next_ns?;
+    if next <= now {
+        if let Some(profile) = profile.as_mut() {
+            profile.prep_deadline += 1;
+        }
+        return None;
+    }
+    let wait_ns = next.saturating_sub(now).min(PARK_BUDGET_NS);
+    let token_started = profile.as_ref().and_then(ParkingProfile::timer);
+    let token = machine.parking_token();
+    if let (Some(profile), Some(started)) = (profile.as_mut(), token_started) {
+        profile.token_calls += 1;
+        profile.token_ns += nanos(started.elapsed());
+    }
+    let token = match token {
+        Ok(token) => token,
+        Err(_) => {
+            if let Some(profile) = profile.as_mut() {
+                profile.prep_token += 1;
+            }
+            return None;
+        }
+    };
+    if host_work_pending_profiled(context, profile) {
+        if let Some(profile) = profile.as_mut() {
+            profile.prep_host_work += 1;
+        }
+        return None;
+    }
+    if let Some(profile) = profile.as_mut() {
+        profile.prepared += 1;
+    }
+    Some(ParkPlan { token, wait_ns })
+}
+
+#[cfg(feature = "parking-profile")]
+fn commit_park_profiled(
+    machine: &mut Machine,
+    plan: ParkPlan,
+    context: &mut ParkContext<'_>,
+    profile: &mut Option<ParkingProfile>,
+) -> Option<helios::machine::ParkedAdvance> {
+    let started = Instant::now();
+    commit_park_with_profiled(machine, plan, context, profile, thread::sleep, || {
+        started.elapsed()
+    })
+}
+
+#[cfg(feature = "parking-profile")]
+fn commit_park_with_profiled(
+    machine: &mut Machine,
+    plan: ParkPlan,
+    context: &mut ParkContext<'_>,
+    profile: &mut Option<ParkingProfile>,
+    mut wait: impl FnMut(Duration),
+    mut elapsed: impl FnMut() -> Duration,
+) -> Option<helios::machine::ParkedAdvance> {
+    let wait_started = profile.as_ref().and_then(ParkingProfile::timer);
+    wait(Duration::from_nanos(plan.wait_ns));
+    if let (Some(profile), Some(started)) = (profile.as_mut(), wait_started) {
+        profile.wait_calls += 1;
+        profile.wait_requested_ns += plan.wait_ns;
+        profile.wait_ns += nanos(started.elapsed());
+    }
+    let raw_elapsed_ns = u64::try_from(elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let elapsed_ns = raw_elapsed_ns.min(plan.wait_ns);
+    if let Some(profile) = profile.as_mut() {
+        profile.oversleep_ns += raw_elapsed_ns.saturating_sub(elapsed_ns);
+    }
+    if context.serial.break_pending || context.serial.break_active {
+        if let Some(profile) = profile.as_mut() {
+            profile.post_break += 1;
+        }
+        return None;
+    }
+    if host_work_pending_profiled(context, profile) {
+        if let Some(profile) = profile.as_mut() {
+            profile.post_host_work += 1;
+        }
+        return None;
+    }
+    let network_started = profile.as_ref().and_then(ParkingProfile::timer);
+    let network_before = context.network.as_ref().map_or(0, |engine| {
+        engine.stats().guest_frames + engine.stats().host_frames
+    });
+    let network_after = service_network(machine, context.network, Instant::now());
+    if let (Some(profile), Some(started)) = (profile.as_mut(), network_started) {
+        profile.network_ns += nanos(started.elapsed());
+    }
+    if network_after != network_before {
+        if let Some(profile) = profile.as_mut() {
+            profile.post_network += 1;
+        }
+        return None;
+    }
+    if elapsed_ns == 0 {
+        if let Some(profile) = profile.as_mut() {
+            profile.post_zero_elapsed += 1;
+        }
+        return None;
+    }
+    let validation_started = profile.as_ref().and_then(ParkingProfile::timer);
+    let advance = machine.advance_parked(plan.token, elapsed_ns);
+    if let (Some(profile), Some(started)) = (profile.as_mut(), validation_started) {
+        profile.validations += 1;
+        profile.validation_ns += nanos(started.elapsed());
+    }
+    match advance {
+        Ok(advance) => {
+            if let Some(profile) = profile.as_mut() {
+                profile.committed += 1;
+                profile.committed_virtual_ns += advance.advanced_ns;
+            }
+            Some(advance)
+        }
+        Err(_) => {
+            if let Some(profile) = profile.as_mut() {
+                profile.post_validation += 1;
+            }
+            None
+        }
+    }
+}
+
+#[cfg(feature = "parking-profile")]
+fn try_park_profiled(
+    machine: &mut Machine,
+    context: &mut ParkContext<'_>,
+    profile: &mut Option<ParkingProfile>,
+) -> bool {
+    let Some(plan) = prepare_park_profiled(machine, context, profile) else {
+        return false;
+    };
+    commit_park_profiled(machine, plan, context, profile).is_some()
+}
+
 fn drain_console(
     machine: &mut Machine,
     state: &mut Snapshot,
@@ -828,9 +1010,18 @@ fn run(
     let mut idle_parking = false;
     let mut pending_command: Option<Command> = None;
     let mut serial = SerialBridge::default();
+    #[cfg(feature = "parking-profile")]
+    let mut profile = ParkingProfile::from_env();
     loop {
         if abort.load(Ordering::Relaxed) {
             break;
+        }
+        #[cfg(feature = "parking-profile")]
+        if let Some(profile) = profile.as_mut() {
+            profile.maybe_reset();
+            if profile.active() {
+                profile.outer_loops += 1;
+            }
         }
         let command = pending_command.take().or_else(|| {
             if state.phase == Phase::Running {
@@ -839,6 +1030,8 @@ fn run(
                 receive.recv_timeout(Duration::from_millis(10)).ok()
             }
         });
+        #[cfg(feature = "parking-profile")]
+        let control_started = profile.as_ref().and_then(ParkingProfile::timer);
         if let Some(command) = command {
             match command {
                 Command::Shutdown => {
@@ -985,8 +1178,18 @@ fn run(
                 *shared.lock().unwrap() = state.clone();
             }
         }
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), control_started) {
+            profile.control_ns += nanos(started.elapsed());
+        }
         if let Some(m) = machine.as_mut() {
+            #[cfg(feature = "parking-profile")]
+            let serial_started = profile.as_ref().and_then(ParkingProfile::timer);
             serial.service(m, state.phase == Phase::Running, &mut state, &input);
+            #[cfg(feature = "parking-profile")]
+            if let (Some(profile), Some(started)) = (profile.as_mut(), serial_started) {
+                profile.serial_ns += nanos(started.elapsed());
+            }
             let scroll = if state.headless {
                 let mut keys = input.lock().unwrap();
                 keys.scroll
@@ -1007,6 +1210,8 @@ fn run(
             continue;
         }
         let m = machine.as_mut().unwrap();
+        #[cfg(feature = "parking-profile")]
+        let input_started = profile.as_ref().and_then(ParkingProfile::timer);
         {
             let mut keys = input.lock().unwrap();
             if keys.release {
@@ -1035,7 +1240,21 @@ fn run(
                 MouseEvent::Button(button, down) => m.mouse_button(button, down),
             }
         }
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), input_started) {
+            profile.input_ns += nanos(started.elapsed());
+        }
+        #[cfg(feature = "parking-profile")]
+        let network_started = profile.as_ref().and_then(ParkingProfile::timer);
         state.network_activity = service_network(m, &mut network, Instant::now());
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), network_started) {
+            profile.network_ns += nanos(started.elapsed());
+        }
+        #[cfg(feature = "parking-profile")]
+        let batch_started = profile.as_ref().and_then(ParkingProfile::timer);
+        #[cfg(feature = "parking-profile")]
+        let mut candidate_ns = 0u64;
         for _ in 0..2048 {
             if let Some(&(code, down)) = pending_keys.front()
                 && m.bus
@@ -1053,6 +1272,12 @@ fn run(
                 Ok(processor) => {
                     state.steps += 1;
                     state.processor_steps[usize::from(processor / 2)] += 1;
+                    #[cfg(feature = "parking-profile")]
+                    if let Some(profile) = profile.as_mut()
+                        && profile.active()
+                    {
+                        profile.instructions += 1;
+                    }
                 }
                 Err(SchedulerError::Cpu { fault, .. }) if fault.is_power_off() => {
                     state.phase = Phase::Stopped;
@@ -1072,7 +1297,21 @@ fn run(
                 && m.cpu.npc() == SOLARIS_IDLE_NPC
                 && m.cpu.psr() == SOLARIS_IDLE_PSR;
             if parking_candidate {
+                #[cfg(feature = "parking-profile")]
+                if let Some(profile) = profile.as_mut()
+                    && profile.active()
+                {
+                    profile.candidates += 1;
+                }
+                #[cfg(feature = "parking-profile")]
+                let candidate_started = profile.as_ref().and_then(ParkingProfile::timer);
+                #[cfg(feature = "parking-profile")]
+                let output_started = profile.as_ref().and_then(ParkingProfile::timer);
                 drain_console(m, &mut state, &mut serial, &mut frame_cache);
+                #[cfg(feature = "parking-profile")]
+                if let (Some(profile), Some(started)) = (profile.as_mut(), output_started) {
+                    profile.output_ns += nanos(started.elapsed());
+                }
                 let mut context = ParkContext {
                     input: &input,
                     receive: &receive,
@@ -1082,12 +1321,33 @@ fn run(
                     network: &mut network,
                     abort: &abort,
                 };
-                if try_park(m, &mut context) {
+                #[cfg(feature = "parking-profile")]
+                let parked = try_park_profiled(m, &mut context, &mut profile);
+                #[cfg(not(feature = "parking-profile"))]
+                let parked = try_park(m, &mut context);
+                #[cfg(feature = "parking-profile")]
+                if let (Some(_), Some(started)) = (profile.as_ref(), candidate_started) {
+                    candidate_ns += nanos(started.elapsed());
+                }
+                if parked {
                     break;
                 }
             }
         }
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), batch_started) {
+            let batch_ns = nanos(started.elapsed());
+            profile.cpu_exec_ns += batch_ns.saturating_sub(candidate_ns);
+        }
+        #[cfg(feature = "parking-profile")]
+        let output_started = profile.as_ref().and_then(ParkingProfile::timer);
         drain_console(m, &mut state, &mut serial, &mut frame_cache);
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), output_started) {
+            profile.output_ns += nanos(started.elapsed());
+        }
+        #[cfg(feature = "parking-profile")]
+        let publish_started = profile.as_ref().and_then(ParkingProfile::timer);
         if frame_at.elapsed() >= Duration::from_millis(33) || state.phase != Phase::Running {
             if serial.pty.is_some() {
                 // A guest can reinitialize the receiver inside this CPU batch.
@@ -1101,6 +1361,10 @@ fn run(
             }
             publish(m, &mut state, &shared, &mut frame_cache);
             frame_at = Instant::now();
+        }
+        #[cfg(feature = "parking-profile")]
+        if let (Some(profile), Some(started)) = (profile.as_mut(), publish_started) {
+            profile.publish_ns += nanos(started.elapsed());
         }
     }
     if let Some(m) = machine {
@@ -1120,6 +1384,10 @@ fn run(
     state.phase = Phase::Stopped;
     state.shutdown_complete = true;
     *shared.lock().unwrap() = state;
+    #[cfg(feature = "parking-profile")]
+    if let Some(profile) = profile {
+        profile.write();
+    }
 }
 
 #[cfg(test)]

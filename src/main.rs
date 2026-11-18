@@ -11,6 +11,8 @@ mod headless_tests;
 mod input;
 mod obp_console;
 mod overlay;
+#[cfg(feature = "parking-profile")]
+mod parking_profile;
 mod profiles;
 #[cfg(test)]
 mod ram_acceptance_tests;
