@@ -1217,6 +1217,7 @@ fn run(
                             {
                                 let mut new = new;
                                 new.set_native_execution_enabled(settings.execution_jit);
+                                new.set_interpret_span_fallback(settings.execution_jit);
                                 machine = Some(new);
                             }
                             #[cfg(not(feature = "jit-native"))]
