@@ -570,7 +570,7 @@ fn step_machine_span(
     let request = std::num::NonZeroUsize::new(budget.clamp(1, 16)).unwrap();
     machine
         .step_native_span(request)
-        .map(|outcome| (0, outcome.steps.len()))
+        .map(|outcome| (0, outcome.len()))
         .map_err(|fault| SchedulerError::Cpu {
             processor: 0,
             fault,
