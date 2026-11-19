@@ -70,6 +70,12 @@ echo or other output is absent; it does not require an echo acknowledgement.
 The 2 ms wait cap and full CPU/MMU/device proof remain in force. These are
 workload measurements, not latency or CPU guarantees for every host or guest.
 
+With a build containing the `jit-native` feature, `--execution jit` (or
+`execution_jit = true`) opts into the native instruction bridge. It is
+default-off, executes only supported already-fetched ALU/SETHI instructions,
+and leaves devices, MMU fetch, interrupts, control flow, memory, traps and
+dual-CPU scheduling on the interpreter path.
+
 ## Build and run
 
 Keep the source checkouts alongside each other:

@@ -16,6 +16,12 @@ All proof, wakeup and 2 ms wait limits remain active. Treat it as an
 experimental default-off setting; the measurements are not universal latency
 or CPU guarantees.
 
+With a `jit-native` build, `execution_jit = true` or `--execution jit` selects
+the opt-in native instruction bridge. It is default-off and currently covers
+only supported ALU/SETHI instructions after the interpreter performs fetch and
+device/interrupt handling. Unsupported instructions, control flow, memory,
+traps and dual-CPU execution remain interpreted.
+
 [Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
 
 The default config is `heliacal.cfg` under:

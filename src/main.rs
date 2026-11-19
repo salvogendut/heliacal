@@ -99,6 +99,7 @@ struct Options {
     boot_smoke: bool,
     screenshot: Option<PathBuf>,
     idle_parking: Option<bool>,
+    execution_jit: Option<bool>,
 }
 impl Options {
     fn parse() -> Result<Option<Self>> {
@@ -123,6 +124,9 @@ impl Options {
         }
         if let Some(idle_parking) = self.idle_parking {
             settings.idle_parking = idle_parking;
+        }
+        if let Some(execution_jit) = self.execution_jit {
+            settings.execution_jit = execution_jit;
         }
         settings.validate_hardware()?;
         Ok(())
@@ -188,6 +192,14 @@ impl Options {
                 "--headless" => o.headless = Some(true),
                 "--graphical" => o.headless = Some(false),
                 "--idle-parking" => o.idle_parking = Some(true),
+                "--execution" => {
+                    let value = args.next().ok_or("--execution needs interpreter or jit")?;
+                    o.execution_jit = Some(match value.as_str() {
+                        "interpreter" => false,
+                        "jit" => true,
+                        _ => return Err("--execution needs interpreter or jit".into()),
+                    });
+                }
                 "--serial-pty-link" => {
                     o.serial_pty_link = Some(args.next().ok_or("--serial-pty-link needs a path")?)
                 }

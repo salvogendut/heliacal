@@ -186,6 +186,8 @@ pub struct Settings {
     pub network: bool,
     /// Opt-in core idle parking; default off preserves the executed guest path.
     pub idle_parking: bool,
+    /// Opt-in native instruction execution; default off in builds with support.
+    pub execution_jit: bool,
     pub smoothing: bool,
     pub scanlines: bool,
     pub show_status: bool,
@@ -219,6 +221,7 @@ impl Default for Settings {
             disk_read_only: false,
             network: true,
             idle_parking: false,
+            execution_jit: false,
             smoothing: false,
             scanlines: false,
             show_status: true,
@@ -720,6 +723,23 @@ display = "sx"
         assert!(roundtrip.idle_parking);
         let text = toml::to_string(&enabled).unwrap();
         assert!(text.contains("idle_parking = true"));
+    }
+
+    #[test]
+    fn native_execution_is_opt_in_and_roundtrips() {
+        let base = Settings::default();
+        assert!(!base.execution_jit);
+        let enabled = Settings {
+            execution_jit: true,
+            ..base.clone()
+        };
+        let roundtrip: Settings = toml::from_str("execution_jit = true").unwrap();
+        assert!(roundtrip.execution_jit);
+        assert!(
+            toml::to_string(&enabled)
+                .unwrap()
+                .contains("execution_jit = true")
+        );
     }
 
     #[test]

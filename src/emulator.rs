@@ -59,6 +59,8 @@ pub struct Snapshot {
     pub secondary_pc: Option<u32>,
     /// Scheduler outcomes by populated module (hardware processors 0 and 2).
     pub processor_steps: [u64; 2],
+    #[allow(dead_code)]
+    pub native_instructions: u64,
     pub serial: String,
     pub serial_screen: Arc<crate::serial_screen::SerialFrame>,
     pub serial_frame: u64,
@@ -91,6 +93,7 @@ impl Default for Snapshot {
             pc: 0,
             secondary_pc: None,
             processor_steps: [0; 2],
+            native_instructions: 0,
             serial: String::new(),
             serial_screen: crate::serial_screen::SerialScreen::default()
                 .publish()
@@ -539,6 +542,10 @@ fn publish(
     }
     state.pc = machine.cpu.pc();
     state.secondary_pc = machine.secondary_cpu().map(|module| module.cpu.pc());
+    #[cfg(feature = "jit-native")]
+    {
+        state.native_instructions = machine.native_execution_count();
+    }
     state.scsi_activity = std::array::from_fn(|id| {
         machine
             .bus
@@ -1091,6 +1098,10 @@ fn run(
                     state.error = None;
                     state.shutdown_failed = false;
                     saved = true;
+                    #[cfg(feature = "jit-native")]
+                    if let Some(m) = &machine {
+                        eprintln!("native instructions: {}", m.native_execution_count());
+                    }
                     break;
                 }
                 Command::SerialBreak => {
@@ -1178,7 +1189,21 @@ fn run(
                                     p.path().display()
                                 );
                             }
-                            machine = Some(new);
+                            #[cfg(feature = "jit-native")]
+                            {
+                                let mut new = new;
+                                new.set_native_execution_enabled(settings.execution_jit);
+                                machine = Some(new);
+                            }
+                            #[cfg(not(feature = "jit-native"))]
+                            {
+                                if settings.execution_jit {
+                                    eprintln!(
+                                        "Native execution requested but this Heliacal build lacks jit-native; using interpreter"
+                                    );
+                                }
+                                machine = Some(new);
+                            }
                             nvram_path = target_path;
                             network = settings
                                 .network
