@@ -558,6 +558,25 @@ fn publish(
     *shared.lock().unwrap() = state.clone();
 }
 
+#[cfg(feature = "jit-native")]
+fn step_machine_span(
+    machine: &mut Machine,
+    budget: usize,
+    allow_span: bool,
+) -> Result<(u8, usize), SchedulerError> {
+    if machine.secondary_cpu().is_some() || !allow_span || !machine.native_execution_enabled() {
+        return step_machine(machine).map(|processor| (processor, 1));
+    }
+    let request = std::num::NonZeroUsize::new(budget.clamp(1, 16)).unwrap();
+    machine
+        .step_native_span(request)
+        .map(|outcome| (0, outcome.steps.len()))
+        .map_err(|fault| SchedulerError::Cpu {
+            processor: 0,
+            fault,
+        })
+}
+
 // Choose once per machine topology; never mix legacy and scheduled stepping
 // on a running dual-CPU machine. Single-CPU machines keep the accepted path.
 fn step_machine(machine: &mut Machine) -> Result<u8, SchedulerError> {
@@ -1100,7 +1119,12 @@ fn run(
                     saved = true;
                     #[cfg(feature = "jit-native")]
                     if let Some(m) = &machine {
-                        eprintln!("native instructions: {}", m.native_execution_count());
+                        eprintln!(
+                            "native instructions: {} calls: {} spans: {}",
+                            m.native_execution_count(),
+                            m.native_execution_calls(),
+                            m.native_span_count()
+                        );
                     }
                     break;
                 }
@@ -1325,7 +1349,8 @@ fn run(
         let batch_started = profile.as_ref().and_then(ParkingProfile::timer);
         #[cfg(feature = "parking-profile")]
         let mut candidate_ns = 0u64;
-        for _ in 0..2048 {
+        let mut batch_budget = 2048usize;
+        while batch_budget != 0 {
             if let Some(&(code, down)) = pending_keys.front()
                 && m.bus
                     .devices_mut()
@@ -1338,15 +1363,21 @@ fn run(
                 pressed[code as usize] = down;
                 pending_keys.pop_front();
             }
-            match step_machine(m) {
-                Ok(processor) => {
-                    state.steps += 1;
-                    state.processor_steps[usize::from(processor / 2)] += 1;
+            #[cfg(feature = "jit-native")]
+            let stepped =
+                step_machine_span(m, batch_budget, !idle_parking && pending_keys.is_empty());
+            #[cfg(not(feature = "jit-native"))]
+            let stepped = step_machine(m).map(|processor| (processor, 1usize));
+            match stepped {
+                Ok((processor, outcomes)) => {
+                    state.steps += outcomes as u64;
+                    batch_budget = batch_budget.saturating_sub(outcomes);
+                    state.processor_steps[usize::from(processor / 2)] += outcomes as u64;
                     #[cfg(feature = "parking-profile")]
                     if let Some(profile) = profile.as_mut()
                         && profile.active()
                     {
-                        profile.instructions += 1;
+                        profile.instructions += outcomes as u64;
                     }
                 }
                 Err(SchedulerError::Cpu { fault, .. }) if fault.is_power_off() => {
