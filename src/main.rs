@@ -798,6 +798,13 @@ fn run(options: Options) -> Result<()> {
         settings = settings.resolve(source_config.parent().unwrap());
     }
     options.apply_hardware(&mut settings)?;
+    #[cfg(not(feature = "jit-native"))]
+    if settings.execution_jit {
+        return Err(
+            "Native execution requested but this Heliacal build lacks the jit-native feature; rebuild with --features jit-native or select interpreter mode"
+                .into(),
+        );
+    }
     if let Some(path) = options.prom {
         settings.prom = if path.is_empty() {
             path

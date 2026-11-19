@@ -47,6 +47,7 @@ pub enum Field {
     SerialConsole,
     AccurateClocks,
     RtcHostTime,
+    Execution,
     Network,
     Smoothing,
     Scanlines,
@@ -293,6 +294,22 @@ impl Overlay {
                             Field::SerialConsole,
                         ),
                         (
+                            "Execution",
+                            #[cfg(feature = "jit-native")]
+                            if self.draft.execution_jit {
+                                "Native JIT".into()
+                            } else {
+                                "Interpreter".into()
+                            },
+                            #[cfg(not(feature = "jit-native"))]
+                            "Native JIT unavailable".into(),
+                            if cfg!(feature = "jit-native") {
+                                Field::Execution
+                            } else {
+                                Field::Fixed
+                            },
+                        ),
+                        (
                             "Accurate CPU clocks",
                             if self.draft.accurate_cpu_clocks {
                                 format!(
@@ -450,6 +467,8 @@ impl Overlay {
             }
             Field::SerialConsole => self.draft.show_serial_console ^= true,
             Field::AccurateClocks => self.draft.accurate_cpu_clocks ^= true,
+            #[cfg(feature = "jit-native")]
+            Field::Execution => self.draft.execution_jit ^= true,
             Field::RtcHostTime => self.draft.rtc_host_time ^= true,
             Field::DiskAccess => self.draft.disk_read_only ^= true,
             Field::Network => self.draft.network ^= true,
