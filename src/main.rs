@@ -9,6 +9,8 @@ mod file_picker;
 #[cfg(test)]
 mod headless_tests;
 mod input;
+#[cfg(feature = "jit-profile")]
+mod jit_phase;
 mod obp_console;
 mod overlay;
 #[cfg(feature = "parking-profile")]

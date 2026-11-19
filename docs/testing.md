@@ -73,3 +73,22 @@ Desktop tests cover proportional resizing and its limits, host keyboard
 layouts, STOPPED guests quitting without confirmation, NVRAM save/retry and
 PTY cleanup, and confirmation for running or paused guests.
 See [architecture](architecture.md) for the frontend/core boundary.
+
+## Sampling JIT phases in the machine worker
+
+Build with `cargo build --release --locked --features jit-profile` and set
+`HELIACAL_JIT_PHASE_DIR` to a fresh private directory for this process.
+Select the execution mode normally with `--execution interpreter|jit`.
+
+To request a sample, atomically rename a file containing a new decimal
+sequence number to `request` inside that directory. Wait for `sample.toml`
+to report the matching request number and process ID. The reply contains the
+worker phase and outcome count, virtual time, actual JIT setting, and
+cumulative per-CPU counters. The worker processes requests between batches
+and while paused. Use one outstanding request at a time. Capture and retain
+the reply before requesting another sample.
+
+Subtract counts only between samples from the same run and CPU epoch. A
+replacement machine or a reset of that CPU requires a new baseline. Use
+the ordinary `jit-native` feature for release timings to keep diagnostic
+costs out of comparisons.

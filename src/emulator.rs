@@ -1078,6 +1078,9 @@ fn run(
     let mut serial = SerialBridge::default();
     #[cfg(feature = "parking-profile")]
     let mut profile = ParkingProfile::from_env();
+    #[cfg(feature = "jit-profile")]
+    let mut phase_probe = std::env::var_os("HELIACAL_JIT_PHASE_DIR")
+        .map(|dir| crate::jit_phase::Probe::new(dir.into()));
     loop {
         if abort.load(Ordering::Relaxed) {
             break;
@@ -1088,6 +1091,10 @@ fn run(
             if profile.active() {
                 profile.outer_loops += 1;
             }
+        }
+        #[cfg(feature = "jit-profile")]
+        if let (Some(probe), Some(m)) = (phase_probe.as_mut(), machine.as_ref()) {
+            probe.poll(m, &state);
         }
         let command = pending_command.take().or_else(|| {
             if state.phase == Phase::Running {
@@ -1495,11 +1502,14 @@ fn run(
 #[cfg(test)]
 mod parking_tests;
 
+#[cfg(all(test, feature = "jit-profile"))]
+mod jit_worker_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn dual_cpu_test_settings(dir: &Path, model: Model) -> Settings {
+    pub(super) fn dual_cpu_test_settings(dir: &Path, model: Model) -> Settings {
         // Both CPUs execute reset firmware. CPU0 releases CPU2 through a
         // guest STA to AER; no host-set entry point or arbitration override.
         let program: [u32; 7] = [
@@ -2162,7 +2172,7 @@ mod tests {
         let replacement = build(&settings, Nvram::default()).unwrap();
         assert!(replacement.bus.devices().unwrap().scsi.target(0).is_none());
     }
-    fn wait(emulator: &Emulator, check: impl Fn(&Snapshot) -> bool) -> Snapshot {
+    pub(super) fn wait(emulator: &Emulator, check: impl Fn(&Snapshot) -> bool) -> Snapshot {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let state = emulator.snapshot();
