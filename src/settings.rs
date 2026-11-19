@@ -406,6 +406,7 @@ impl Settings {
             && self.scsi == other.scsi
             && self.disk_read_only == other.disk_read_only
             && self.network == other.network
+            && self.execution_jit == other.execution_jit
     }
 
     // Paths in a config are relative to that config, not the launch directory.
