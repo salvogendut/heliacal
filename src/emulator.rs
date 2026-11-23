@@ -26,6 +26,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod ultra5;
+use ultra5::{Guest, Ultra5};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Ready,
@@ -55,7 +58,8 @@ pub struct Snapshot {
     pub pixels: Arc<Vec<u8>>,
     pub frame: u64,
     pub steps: u64,
-    pub pc: u32,
+    pub pc: u64,
+    pub video_size: (usize, usize),
     pub secondary_pc: Option<u32>,
     /// Scheduler outcomes by populated module (hardware processors 0 and 2).
     pub processor_steps: [u64; 2],
@@ -89,6 +93,7 @@ impl Default for Snapshot {
             frame: 0,
             steps: 0,
             pc: 0,
+            video_size: (WIDTH, HEIGHT),
             secondary_pc: None,
             processor_steps: [0; 2],
             serial: String::new(),
@@ -312,6 +317,9 @@ fn read_rom(path: &str, label: &str, max: usize) -> Result<Vec<u8>, String> {
 }
 
 fn selected_firmware(settings: &Settings) -> Result<FirmwareImage, String> {
+    if settings.model == Model::Ultra5 && settings.prom.is_empty() {
+        return Err("Select a 1 MiB Ultra 5 OpenBoot flash in F9 > General".into());
+    }
     FirmwareImage::load((!settings.prom.is_empty()).then(|| Path::new(&settings.prom)))
 }
 
@@ -348,7 +356,7 @@ fn build_at_with_firmware(
     firmware: &FirmwareImage,
 ) -> Result<Machine, String> {
     settings.validate()?;
-    let profile = settings.model.profile();
+    let profile = settings.model.profile().ok_or("expected a sun4m machine")?;
     let prom = &firmware.bytes;
     let mut nvram = if firmware.kind == FirmwareKind::OpenBios {
         helios::firmware::validate_openbios_ram(
@@ -373,6 +381,7 @@ fn build_at_with_firmware(
         None
     } else {
         match settings.display {
+            Display::Mach64 => return Err("Mach64 requires an Ultra 5".into()),
             Display::Sx => {
                 if !settings.model.supports_sx() {
                     return Err(format!(
@@ -472,7 +481,7 @@ fn load_nvram(path: &Path, model: Model, firmware: FirmwareKind) -> Result<Nvram
     match fs::read(path) {
         Ok(bytes) => Nvram::from_image(&bytes).map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(firmware.default_nvram(model.profile()))
+            Ok(firmware.default_nvram(model.profile().ok_or("expected a sun4m machine")?))
         }
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
@@ -487,8 +496,9 @@ fn blit_pixels(
     if frame_cache.scanout == Some(scanout) {
         return;
     }
-    if frame_cache.pixels.len() != WIDTH * HEIGHT {
-        frame_cache.pixels.resize(WIDTH * HEIGHT, 0);
+    let (width, height) = state.video_size;
+    if frame_cache.pixels.len() != width * height {
+        frame_cache.pixels.resize(width * height, 0);
     }
     draw(&mut frame_cache.pixels);
     // A uniform framebuffer is still a blank console. Latch this off after
@@ -503,8 +513,8 @@ fn blit_pixels(
         state.waiting_for_console = false;
     }
     let rgba = Arc::make_mut(&mut state.pixels);
-    if rgba.len() != WIDTH * HEIGHT * 4 {
-        rgba.resize(WIDTH * HEIGHT * 4, 0);
+    if rgba.len() != width * height * 4 {
+        rgba.resize(width * height * 4, 0);
     }
     for (chunk, pixel) in rgba
         .as_chunks_mut::<4>()
@@ -537,7 +547,7 @@ fn publish(
         state.serial_screen = screen;
         state.serial_frame = state.serial_frame.wrapping_add(1);
     }
-    state.pc = machine.cpu.pc();
+    state.pc = u64::from(machine.cpu.pc());
     state.secondary_pc = machine.secondary_cpu().map(|module| module.cpu.pc());
     state.scsi_activity = std::array::from_fn(|id| {
         machine
@@ -1037,7 +1047,7 @@ fn run(
     abort: Arc<AtomicBool>,
     nvram_base: &Path,
 ) {
-    let mut machine: Option<Machine> = None;
+    let mut machine: Option<Guest> = None;
     let mut nvram_path = nvram_base.to_path_buf();
     let mut network: Option<NatEngine> = None;
     let mut state = Snapshot::default();
@@ -1076,8 +1086,7 @@ fn run(
             match command {
                 Command::Shutdown => {
                     if let Some(m) = &machine
-                        && let Err(error) =
-                            atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())
+                        && let Err(error) = atomic_write(&nvram_path, &m.nvram())
                     {
                         state.error = Some(error);
                         state.shutdown_failed = true;
@@ -1085,7 +1094,7 @@ fn run(
                             state.phase = Phase::Paused;
                             serial.clear_input_grace();
                         }
-                        publish(m, &mut state, &shared, &mut frame_cache);
+                        m.publish(&mut state, &shared, &mut frame_cache);
                         continue;
                     }
                     state.error = None;
@@ -1115,19 +1124,48 @@ fn run(
                         let firmware = selected_firmware(&settings)?;
                         let target_path =
                             firmware.kind.nvram_path(&settings.nvram_path(nvram_base));
-                        let nvram = if let Some(m) = &machine {
+                        let retained = if let Some(m) = &machine {
                             if nvram_path == target_path {
-                                m.bus.devices().unwrap().nvram.clone()
+                                Some(m.nvram())
                             } else {
-                                atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())?;
-                                load_nvram(&target_path, settings.model, firmware.kind)?
+                                atomic_write(&nvram_path, &m.nvram())?;
+                                None
                             }
                         } else {
-                            load_nvram(&target_path, settings.model, firmware.kind)?
+                            None
                         };
-                        let new = build_with_firmware(&settings, nvram, &firmware)?;
                         let firmware_label =
                             format!("{} ({})", firmware.kind.label(), firmware.path.display());
+                        let kind = firmware.kind;
+                        settings.validate()?;
+                        let new = if settings.model == Model::Ultra5 {
+                            if kind != FirmwareKind::Obp {
+                                return Err("Ultra 5 requires original 1 MiB flash firmware".into());
+                            }
+                            let bytes = match retained {
+                                Some(bytes) => bytes,
+                                None => match fs::read(&target_path) {
+                                    Ok(bytes) => bytes,
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                        Nvram::default().image()
+                                    }
+                                    Err(e) => {
+                                        return Err(format!("{}: {e}", target_path.display()));
+                                    }
+                                },
+                            };
+                            Guest::Ultra5(Box::new(Ultra5::new(&settings, firmware.bytes, bytes)?))
+                        } else {
+                            let nvram = match retained {
+                                Some(bytes) => {
+                                    Nvram::from_image(&bytes).map_err(|e| e.to_string())?
+                                }
+                                None => load_nvram(&target_path, settings.model, kind)?,
+                            };
+                            Guest::Sun4m(Box::new(build_with_firmware(
+                                &settings, nvram, &firmware,
+                            )?))
+                        };
                         // Reserve a different endpoint before replacing the running machine.
                         let reuse = settings.headless
                             && serial
@@ -1139,28 +1177,26 @@ fn run(
                         } else {
                             None
                         };
-                        Ok::<_, String>((
-                            new,
-                            pty,
-                            reuse,
-                            target_path,
-                            firmware_label,
-                            firmware.kind,
-                        ))
+                        Ok::<_, String>((new, pty, reuse, target_path, firmware_label, kind))
                     })();
                     match replacement {
                         Ok((new, pty, reuse, target_path, firmware_label, firmware_kind)) => {
                             eprintln!("Firmware: {firmware_label}");
                             state.firmware = Some(firmware_label);
-                            state.waiting_for_console = firmware_kind == FirmwareKind::OpenBios;
+                            state.waiting_for_console = firmware_kind == FirmwareKind::OpenBios
+                                || settings.model == Model::Ultra5;
                             if !reuse {
                                 serial.pty = pty;
                             }
                             if let Some(p) = &mut serial.pty {
                                 p.reset();
                             }
-                            serial.epoch =
-                                new.bus.devices().unwrap().serial.receiver_epoch(Channel::A);
+                            serial.epoch = match &new {
+                                Guest::Sun4m(m) => {
+                                    m.bus.devices().unwrap().serial.receiver_epoch(Channel::A)
+                                }
+                                Guest::Ultra5(_) => 0,
+                            };
                             serial.break_pending = false;
                             serial.break_active = false;
                             serial.clear_input_grace();
@@ -1180,8 +1216,7 @@ fn run(
                             }
                             machine = Some(new);
                             nvram_path = target_path;
-                            network = settings
-                                .network
+                            network = (settings.network && settings.model != Model::Ultra5)
                                 .then(|| NatEngine::new(NatConfig::default()));
                             state.phase = Phase::Running;
                             idle_parking = settings.idle_parking;
@@ -1191,6 +1226,8 @@ fn run(
                             state.steps = 0;
                             state.processor_steps = [0; 2];
                             state.network_activity = 0;
+                            state.video_size = (WIDTH, HEIGHT);
+                            state.scsi_activity = [(0, 0); SCSI_TARGETS];
                             state.serial.clear();
                             state.error = None;
                             state.pixels = Arc::new(vec![0; WIDTH * HEIGHT * 4]);
@@ -1218,7 +1255,7 @@ fn run(
                 }
             }
             if let Some(m) = &machine {
-                publish(m, &mut state, &shared, &mut frame_cache);
+                m.publish(&mut state, &shared, &mut frame_cache);
             } else {
                 *shared.lock().unwrap() = state.clone();
             }
@@ -1227,7 +1264,7 @@ fn run(
         if let (Some(profile), Some(started)) = (profile.as_mut(), control_started) {
             profile.control_ns += nanos(started.elapsed());
         }
-        if let Some(m) = machine.as_mut() {
+        if let Some(Guest::Sun4m(m)) = machine.as_mut() {
             #[cfg(feature = "parking-profile")]
             let serial_started = profile.as_ref().and_then(ParkingProfile::timer);
             serial.service(m, state.phase == Phase::Running, &mut state, &input);
@@ -1250,6 +1287,9 @@ fn run(
             } else if state.phase != Phase::Running {
                 *shared.lock().unwrap() = state.clone();
             }
+        }
+        if state.phase != Phase::Running && matches!(machine, Some(Guest::Ultra5(_))) {
+            *shared.lock().unwrap() = state.clone();
         }
         if state.phase != Phase::Running {
             continue;
@@ -1279,6 +1319,21 @@ fn run(
                 pending_keys.push_back(event);
             }
         }
+        let m = match m {
+            Guest::Sun4m(m) => m,
+            Guest::Ultra5(m) => {
+                for event in pending_mouse.drain(..) {
+                    m.mouse_event(event);
+                }
+                m.batch(&mut pending_keys, &mut pressed, &mut state);
+                if frame_at.elapsed() >= Duration::from_millis(33) || state.phase != Phase::Running
+                {
+                    m.publish(&mut state, &shared, &mut frame_cache);
+                    frame_at = Instant::now();
+                }
+                continue;
+            }
+        };
         while let Some(event) = pending_mouse.pop_front() {
             match event {
                 MouseEvent::Motion(dx, dy) => m.mouse_motion(dx, dy),
@@ -1413,16 +1468,14 @@ fn run(
         }
     }
     if let Some(m) = machine {
-        if !saved
-            && let Err(error) = atomic_write(&nvram_path, &m.bus.devices().unwrap().nvram.image())
-        {
+        if !saved && let Err(error) = atomic_write(&nvram_path, &m.nvram()) {
             eprintln!("{error}");
             state.error = Some(error);
         } else {
             // A prior core fault is already visible; it is not a state-save failure.
             state.error = None;
         }
-        publish(&m, &mut state, &shared, &mut frame_cache);
+        m.publish(&mut state, &shared, &mut frame_cache);
     }
     drop(serial); // Remove only our alias before publishing final shutdown.
     state.serial_endpoint = None;
@@ -1514,7 +1567,7 @@ mod tests {
             rtc_host_time: false,
             ..Settings::default()
         };
-        let fresh = || FirmwareKind::OpenBios.default_nvram(settings.model.profile());
+        let fresh = || FirmwareKind::OpenBios.default_nvram(settings.model.profile().unwrap());
         assert!(
             build_at_with_firmware(&settings, fresh(), 0, &firmware)
                 .err()
@@ -1531,7 +1584,7 @@ mod tests {
         settings.model = Model::Sparcstation5;
         settings.display = Display::Cgsix;
         settings.ram_mib = 48;
-        let nvram = FirmwareKind::OpenBios.default_nvram(settings.model.profile());
+        let nvram = FirmwareKind::OpenBios.default_nvram(settings.model.profile().unwrap());
         assert!(
             build_at_with_firmware(&settings, nvram, 0, &firmware)
                 .err()
@@ -1865,7 +1918,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let prom = dir.path().join("prom");
         fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
-        for model in Model::ALL {
+        for model in Model::SUN4M {
             for rtc_host_time in [false, true] {
                 let settings = Settings {
                     model,
@@ -1904,7 +1957,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let prom = dir.path().join("prom");
         fs::write(&prom, helios::machine::serial_demo_image()).unwrap();
-        for model in Model::ALL {
+        for model in Model::SUN4M {
             for accurate_cpu_clocks in [false, true] {
                 let settings = Settings {
                     model,
@@ -1927,7 +1980,7 @@ mod tests {
                 assert_eq!(
                     machine.cpu_clock_hz(),
                     if accurate_cpu_clocks {
-                        model.profile().cpu_clock_hz()
+                        model.profile().unwrap().cpu_clock_hz()
                     } else {
                         10_000_000
                     }

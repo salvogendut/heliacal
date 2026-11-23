@@ -52,11 +52,11 @@ fn panel(c: &mut WindowCanvas, rect: Rect) -> Result<(), sdl3::Error> {
     c.set_draw_color(BORDER);
     c.draw_rect(rect)
 }
-pub fn guest_rect(show_status: bool) -> Rect {
+pub fn guest_rect(show_status: bool, size: (usize, usize)) -> Rect {
     let height = HEIGHT - LED_HEIGHT - if show_status { HINT_HEIGHT } else { 0 };
-    let scale = (WIDTH as f32 / 1152.0).min(height as f32 / 900.0);
-    let width = (1152.0 * scale) as u32;
-    let height = (900.0 * scale) as u32;
+    let scale = (WIDTH as f32 / size.0 as f32).min(height as f32 / size.1 as f32);
+    let width = (size.0 as f32 * scale) as u32;
+    let height = (size.1 as f32 * scale) as u32;
     Rect::new(((WIDTH - width) / 2) as i32, 0, width, height)
 }
 
@@ -338,7 +338,7 @@ pub fn draw(
     c.set_draw_color(Color::RGB(5, 8, 14));
     c.clear();
     c.set_blend_mode(BlendMode::Blend);
-    let destination = guest_rect(p.settings.show_status);
+    let destination = guest_rect(p.settings.show_status, p.state.video_size);
     if p.state.has_machine && p.state.headless && p.settings.show_serial_console {
         draw_serial_console(c, p.state, p.serial_focused, p.serial_selection)?;
     } else if p.state.has_machine && p.state.headless {
@@ -463,7 +463,7 @@ pub fn draw(
             &format!(
                 "F9  Select {}{}",
                 machine.prom_label(),
-                if p.settings.headless || p.settings.display == crate::settings::Display::Sx {
+                if p.settings.headless || p.settings.display != crate::settings::Display::Cgsix {
                     ""
                 } else {
                     " and TurboGX ROM"
@@ -479,7 +479,7 @@ pub fn draw(
     {
         let y = if p.state.headless { 172 } else { 260 };
         panel(c, Rect::new(144, y, 672, 128))?;
-        text(c, 168, y + 24, "OPENBIOS / CONSOLE STARTUP", ACCENT)?;
+        text(c, 168, y + 24, "FIRMWARE / CONSOLE STARTUP", ACCENT)?;
         text(
             c,
             168,
@@ -498,7 +498,7 @@ pub fn draw(
             if p.state.headless {
                 "Serial output appears here once the firmware enables TTYA."
             } else {
-                "The guest display appears when TurboGX is ready."
+                "The guest display appears when the framebuffer is ready."
             },
             MUTED,
         )?;
@@ -673,7 +673,7 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
             CPU_LED,
         ),
     ];
-    if p.settings.network {
+    if p.settings.network && p.settings.model != crate::settings::Model::Ultra5 {
         lamps.push((
             "NET".to_owned(),
             p.leds & activity::ethernet() != 0,

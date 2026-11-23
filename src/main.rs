@@ -107,6 +107,15 @@ impl Options {
 
     fn apply_hardware(&self, settings: &mut Settings) -> Result<()> {
         if let Some(model) = self.machine {
+            if model == Model::Ultra5 && settings.model != model {
+                settings.ram_mib = 512;
+                settings.cpus = 1;
+                settings.display = Display::Mach64;
+                settings.headless = false;
+            } else if model != Model::Ultra5 && settings.model == Model::Ultra5 {
+                settings.ram_mib = 128;
+                settings.display = Display::Cgsix;
+            }
             settings.model = model;
         }
         if let Some(cpus) = self.cpus {
@@ -135,7 +144,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320]\n                [--cpus 1|2] [--display cgsix|sx] [--ram-mib MIB]\n                [--headless | --graphical] [--idle-parking] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 or Axil 320; default 128 MiB RAM.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\n--idle-parking enables experimental single-CPU SS-20 Solaris idle parking (default off).\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot + shutter sound   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Quit (no confirmation when STOPPED)\nCtrl+Plus / Ctrl+Minus Resize window outside fullscreen (Ctrl+Equals/keypad also work).\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nHeadless: click the serial console to type; Ctrl+Enter focuses/releases it.\nCopy command copies minicom; Ctrl+Shift+C copies selected serial text (or its command).\nCtrl+Shift+V pastes into the focused serial console or captured graphical guest.\nWheel/scrollbar or Shift+PageUp/PageDown browse serial history; Shift+End goes live.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
+                        "Heliacal - Happy Years frontend for Helios\n\nUsage: heliacal [--config PATH] [--machine ss5|ss20|axil320|ultra5]\n                [--cpus 1|2] [--display cgsix|sx|mach64] [--ram-mib MIB]\n                [--headless | --graphical] [--idle-parking] [--serial-pty-link PATH]\n                [--prom PATH] [--cgsix-rom PATH]\n                [--disk RAW_OR_CHD] [--cdrom ISO] [--machine-label LABEL]\n                [--smoke-test | --boot-smoke-test] [--screenshot PATH.bmp]\n\nSun SPARCstation 5, SPARCstation 20 and Axil 320 default to 128 MiB RAM.\nUltra 5 uses 512 MiB, one UltraSPARC-IIi, onboard Mach64 and an explicit 1 MiB OBP flash.\nSS-20 supports native SX/CG14 or TurboGX; SS-5 and Axil 320 use TurboGX.\nSS-5: 1 CPU; SS-20/Axil: 1 or 2 CPUs (experimental SMP).\n--ram-mib accepts only the exact DSIMM totals valid for the selected model/display.\nHeadless retains the control window and uses a TTYA PTY; no framebuffer ROM required.\n--idle-parking enables experimental single-CPU SS-20 Solaris idle parking (default off).\nF9 > General > Tinker enables Headless/PTY controls in Advanced.\nStarts paused. An empty PROM path selects the installed OpenBIOS fallback.\nAn explicit PROM takes precedence; errors do not trigger a fallback.\nHELIOS_OPENBIOS can specify the OpenBIOS ELF file. Firmware is not bundled.\nHard disks default to read/write; CDs are read-only.\nCtrl+P Boot/pause/resume   F4 Screenshot + shutter sound   F5 Confirm cold reset\nF9 Settings   F11 Fullscreen   F12 Quit (no confirmation when STOPPED)\nCtrl+Plus / Ctrl+Minus Resize window outside fullscreen (Ctrl+Equals/keypad also work).\nClick the guest display to capture the keyboard and mouse; Ctrl+Enter releases both.\nHeadless: click the serial console to type; Ctrl+Enter focuses/releases it.\nCopy command copies minicom; Ctrl+Shift+C copies selected serial text (or its command).\nCtrl+Shift+V pastes into the focused serial console or captured graphical guest.\nWheel/scrollbar or Shift+PageUp/PageDown browse serial history; Shift+End goes live.\nPause + A sends Sun Stop-A. Hold Shift to pass reserved function keys.\nOptions: arrows/Tab navigate, Enter/Ctrl+B choose a file, Ctrl+E type a path, F9 save.\nEsc closes a draft; unsaved changes prompt Save/Discard/Cancel (default Cancel).\nConfig paths are relative to the config; CLI paths use the working directory.\nSmoke tests use temporary state. --boot-smoke-test waits up to 180 seconds\nfor guest display output; it does not verify OS boot."
                     );
                     return Ok(None);
                 }
@@ -148,14 +157,17 @@ impl Options {
                     o.machine_label = Some(args.next().ok_or("--machine-label needs a label")?)
                 }
                 "--machine" => {
-                    let value = args.next().ok_or("--machine needs ss5, ss20 or axil320")?;
+                    let value = args
+                        .next()
+                        .ok_or("--machine needs ss5, ss20, axil320 or ultra5")?;
                     o.machine = Some(match value.as_str() {
                         "ss5" => Model::Sparcstation5,
                         "ss20" => Model::Sparcstation20,
+                        "ultra5" => Model::Ultra5,
                         "axil320" => Model::Axil320,
                         _ => {
                             return Err(format!(
-                                "Unknown machine {value}; use ss5, ss20 or axil320"
+                                "Unknown machine {value}; use ss5, ss20, axil320 or ultra5"
                             )
                             .into());
                         }
@@ -182,6 +194,7 @@ impl Options {
                     o.display = Some(match value.as_str() {
                         "cgsix" => Display::Cgsix,
                         "sx" => Display::Sx,
+                        "mach64" => Display::Mach64,
                         _ => return Err(format!("Unknown display {value}; use cgsix or sx").into()),
                     });
                 }
@@ -322,7 +335,7 @@ impl App {
         let filters: &[DialogFileFilter] = match field {
             Field::Prom => &PROM_FILTERS,
             Field::Rom => &ROM_FILTERS,
-            Field::Scsi(_) | Field::NewDiskPath => &MEDIA_FILTERS,
+            Field::IdeDisk | Field::Scsi(_) | Field::NewDiskPath => &MEDIA_FILTERS,
             Field::SerialPtyLink => {
                 if let Some(o) = &mut self.overlay {
                     o.activate();
@@ -470,8 +483,7 @@ impl App {
         write!(
             file,
             "P6\n{} {}\n255\n",
-            helios::devices::cgsix::WIDTH,
-            helios::devices::cgsix::HEIGHT
+            state.video_size.0, state.video_size.1
         )?;
         let rgb: Vec<u8> = state
             .pixels
@@ -806,10 +818,12 @@ fn run(options: Options) -> Result<()> {
         (6, TargetKind::Cdrom, options.cdrom),
     ] {
         if let Some(path) = path {
-            settings.scsi[id] = ScsiTarget {
-                kind,
-                path: std::path::absolute(path)?.to_string_lossy().into_owned(),
-            };
+            let path = std::path::absolute(path)?.to_string_lossy().into_owned();
+            if settings.model == Model::Ultra5 && kind == TargetKind::Disk {
+                settings.ide_disk = path;
+            } else {
+                settings.scsi[id] = ScsiTarget { kind, path };
+            }
         }
     }
     let config = temp
@@ -874,7 +888,7 @@ fn run(options: Options) -> Result<()> {
     logo_texture.update(None, &logo_bytes, lw as usize * 4)?;
     logo_texture.set_blend_mode(sdl3::render::BlendMode::Blend);
     logo_texture.set_scale_mode(ScaleMode::Linear);
-    let (gw, gh) = (
+    let (mut gw, mut gh) = (
         helios::devices::cgsix::WIDTH as u32,
         helios::devices::cgsix::HEIGHT as u32,
     );
@@ -1122,7 +1136,8 @@ fn run(options: Options) -> Result<()> {
                                     view::serial_cell_at(x, y),
                                 ));
                             }
-                        } else if view::guest_rect(app.settings.show_status).contains_point((x, y))
+                        } else if view::guest_rect(app.settings.show_status, state.video_size)
+                            .contains_point((x, y))
                             && state.phase == Phase::Running
                         {
                             app.captured = true;
@@ -1266,6 +1281,15 @@ fn run(options: Options) -> Result<()> {
             app.release();
         }
         if frame_id != state.frame {
+            if (gw as usize, gh as usize) != state.video_size {
+                (gw, gh) = (state.video_size.0 as u32, state.video_size.1 as u32);
+                guest = creator.create_texture_streaming(PixelFormat::RGBA32, gw, gh)?;
+                guest.set_scale_mode(if app.settings.smoothing {
+                    ScaleMode::Linear
+                } else {
+                    ScaleMode::Nearest
+                });
+            }
             guest.update(None, &state.pixels, gw as usize * 4)?;
             frame_id = state.frame;
             redraw = true;

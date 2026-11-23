@@ -32,6 +32,7 @@ pub enum Field {
     Display,
     Prom,
     Rom,
+    IdeDisk,
     Scsi(usize),
     NewDisk,
     NewDiskPath,
@@ -57,7 +58,12 @@ impl Field {
     pub fn is_path(self) -> bool {
         matches!(
             self,
-            Self::Prom | Self::Rom | Self::Scsi(_) | Self::SerialPtyLink | Self::NewDiskPath
+            Self::Prom
+                | Self::Rom
+                | Self::IdeDisk
+                | Self::Scsi(_)
+                | Self::SerialPtyLink
+                | Self::NewDiskPath
         )
     }
 }
@@ -159,13 +165,24 @@ impl Overlay {
                     } else {
                         "1".into()
                     },
-                    if self.draft.model == crate::settings::Model::Sparcstation5 {
+                    if matches!(
+                        self.draft.model,
+                        crate::settings::Model::Sparcstation5 | crate::settings::Model::Ultra5
+                    ) {
                         Field::Fixed
                     } else {
                         Field::CpuCount
                     },
                 ),
-                ("Memory", format!("{} MiB", self.draft.ram_mib), Field::Ram),
+                (
+                    "Memory",
+                    format!("{} MiB", self.draft.ram_mib),
+                    if self.draft.model == crate::settings::Model::Ultra5 {
+                        Field::Fixed
+                    } else {
+                        Field::Ram
+                    },
+                ),
                 (
                     "Graphics",
                     if self.draft.headless {
@@ -182,7 +199,7 @@ impl Overlay {
                     } else {
                         self.draft.display.label().into()
                     },
-                    if self.draft.headless {
+                    if self.draft.headless || self.draft.model == crate::settings::Model::Ultra5 {
                         Field::Fixed
                     } else {
                         Field::Display
@@ -190,7 +207,11 @@ impl Overlay {
                 ),
                 (
                     self.draft.model.prom_label(),
-                    if self.draft.prom.is_empty() {
+                    if self.draft.prom.is_empty()
+                        && self.draft.model == crate::settings::Model::Ultra5
+                    {
+                        "Select original 1 MiB flash".into()
+                    } else if self.draft.prom.is_empty() {
                         "OpenBIOS (automatic)".into()
                     } else {
                         path_label(&self.draft.prom)
@@ -211,6 +232,22 @@ impl Overlay {
                     "Shortcut hints",
                     on_off(self.draft.show_status),
                     Field::Status,
+                ),
+            ],
+            Tab::Media if self.draft.model == crate::settings::Model::Ultra5 => vec![
+                (
+                    "IDE disk (primary master)",
+                    path_label(&self.draft.ide_disk),
+                    Field::IdeDisk,
+                ),
+                (
+                    "IDE CD-ROM (secondary master)",
+                    if self.draft.scsi[6].kind == TargetKind::Cdrom {
+                        path_label(&self.draft.scsi[6].path)
+                    } else {
+                        path_label("")
+                    },
+                    Field::Scsi(6),
                 ),
             ],
             Tab::Media => [
@@ -237,6 +274,25 @@ impl Overlay {
                 Field::NewDisk,
             )))
             .collect(),
+            Tab::Network if self.draft.model == crate::settings::Model::Ultra5 => {
+                vec![("Ethernet", "Firmware probe only".into(), Field::Fixed)]
+            }
+            Tab::Advanced if self.draft.model == crate::settings::Model::Ultra5 => vec![
+                (
+                    "Disk access",
+                    if self.draft.disk_read_only {
+                        "Read-only".into()
+                    } else {
+                        "Read/write".into()
+                    },
+                    Field::DiskAccess,
+                ),
+                (
+                    "Console",
+                    "Onboard Mach64 and Sun Type 5 keyboard".into(),
+                    Field::Fixed,
+                ),
+            ],
             Tab::Network => vec![
                 (
                     "Host networking",
@@ -297,7 +353,10 @@ impl Overlay {
                             if self.draft.accurate_cpu_clocks {
                                 format!(
                                     "On / {} MHz",
-                                    self.draft.model.profile().cpu_clock_hz() / 1_000_000
+                                    self.draft
+                                        .model
+                                        .profile()
+                                        .map_or(440, |p| p.cpu_clock_hz() / 1_000_000)
                                 )
                             } else {
                                 "Off / faster boots".into()
@@ -320,6 +379,10 @@ impl Overlay {
             Tab::About => vec![],
         }
         .into_iter()
+        .filter(|(_, _, field)| {
+            self.draft.model != crate::settings::Model::Ultra5
+                || !matches!(field, Field::Rom | Field::NewDisk)
+        })
         .map(|(label, value, field)| Row {
             label,
             value,
@@ -356,6 +419,7 @@ impl Overlay {
             Field::SerialPtyLink => Some(&self.draft.serial_pty_link),
             Field::Prom => Some(&self.draft.prom),
             Field::Rom => Some(&self.draft.cgsix_rom),
+            Field::IdeDisk => Some(&self.draft.ide_disk),
             Field::Scsi(id) => Some(&self.draft.scsi[id].path),
             _ => None,
         }
@@ -366,6 +430,7 @@ impl Overlay {
             Field::SerialPtyLink => Some(&mut self.draft.serial_pty_link),
             Field::Prom => Some(&mut self.draft.prom),
             Field::Rom => Some(&mut self.draft.cgsix_rom),
+            Field::IdeDisk => Some(&mut self.draft.ide_disk),
             Field::Scsi(id) => Some(&mut self.draft.scsi[id].path),
             _ => None,
         }
@@ -416,12 +481,15 @@ impl Overlay {
                     .draft
                     .model
                     .profile()
-                    .processor_topology(usize::from(self.draft.cpus))
+                    .and_then(|p| p.processor_topology(usize::from(self.draft.cpus)))
                     .is_none()
                 {
                     self.draft.cpus = 1;
                 }
-                if !self.draft.model.supports_sx() {
+                if self.draft.model == crate::settings::Model::Ultra5 {
+                    self.draft.display = Display::Mach64;
+                    self.draft.headless = false;
+                } else if !self.draft.model.supports_sx() || self.draft.display == Display::Mach64 {
                     self.draft.display = Display::Cgsix;
                 }
                 self.adjust_ram_after_hardware_change();
@@ -509,7 +577,8 @@ impl Overlay {
     pub fn set_path(&mut self, field: Field, value: String) {
         if let Field::Scsi(id) = field
             && !value.is_empty()
-            && self.draft.scsi[id].kind == TargetKind::Disconnected
+            && (self.draft.scsi[id].kind == TargetKind::Disconnected
+                || (id == 6 && self.draft.model == crate::settings::Model::Ultra5))
         {
             self.draft.scsi[id].kind = if id == 6 {
                 TargetKind::Cdrom
@@ -537,7 +606,15 @@ impl Overlay {
     }
     pub fn cycle_target(&mut self) {
         if let Field::Scsi(id) = self.field() {
-            self.draft.scsi[id].kind = self.draft.scsi[id].kind.next();
+            self.draft.scsi[id].kind = if self.draft.model == crate::settings::Model::Ultra5 {
+                if self.draft.scsi[id].kind == TargetKind::Cdrom {
+                    TargetKind::Disconnected
+                } else {
+                    TargetKind::Cdrom
+                }
+            } else {
+                self.draft.scsi[id].kind.next()
+            };
         }
     }
     pub fn detach(&mut self) {
@@ -664,7 +741,10 @@ mod tests {
         overlay.activate(); // SS20 -> Axil: 512 remains valid.
         assert_eq!(overlay.draft.ram_mib, 512);
         assert!(overlay.notice.is_none());
-        overlay.activate(); // Axil -> SS5: largest valid <=512 is 256.
+        overlay.activate(); // Axil -> Ultra 5: the fixed memory size is 512.
+        assert_eq!(overlay.draft.model, crate::settings::Model::Ultra5);
+        assert_eq!(overlay.draft.ram_mib, 512);
+        overlay.activate(); // Ultra 5 -> SS-5.
         assert_eq!(overlay.draft.ram_mib, 256);
         assert!(overlay.notice.as_deref().unwrap().contains("512 to 256"));
         assert_eq!(saved.ram_mib, 512);
@@ -761,8 +841,11 @@ mod tests {
         o.activate();
         assert_eq!(o.draft.model, crate::settings::Model::Axil320);
         o.activate();
+        assert_eq!(o.draft.model, crate::settings::Model::Ultra5);
+        assert_eq!(o.draft.ram_mib, 512);
+        o.activate();
         assert_eq!(o.draft.model, crate::settings::Model::Sparcstation5);
-        assert!(!o.dirty(&settings));
+        assert!(o.draft.validate_hardware().is_ok());
         o.selected = o
             .rows()
             .iter()

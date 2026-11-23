@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fs, thread};
 
 fn oracle(model: Model, display: Display) -> Vec<u32> {
     let (slots, modules): (usize, &[u32]) = match model {
+        Model::Ultra5 => return vec![512],
         Model::Sparcstation5 => (8, &[0, 8, 32]),
         Model::Sparcstation20 if display == Display::Sx => (7, &[0, 16, 32, 64]),
         Model::Axil320 => (8, &[0, 16, 64]),

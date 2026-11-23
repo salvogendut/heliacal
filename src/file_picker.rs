@@ -30,7 +30,8 @@ impl Kind {
     fn for_field(field: Field, settings: &Settings) -> Option<Self> {
         match field {
             Field::Prom | Field::Rom => Some(Self::Firmware),
-            Field::NewDiskPath => Some(Self::Disk),
+            Field::IdeDisk | Field::NewDiskPath => Some(Self::Disk),
+            Field::Scsi(6) if settings.model == settings::Model::Ultra5 => Some(Self::Cdrom),
             Field::Scsi(id) => Some(match settings.scsi.get(id)?.kind {
                 TargetKind::Cdrom => Self::Cdrom,
                 TargetKind::Disconnected if id == 6 => Self::Cdrom,

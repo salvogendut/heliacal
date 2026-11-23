@@ -4,7 +4,7 @@
 
 ## Supported models
 
-The machine is selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
+The sun4m machines are selectable as **Sun SPARCstation 5**, **Sun SPARCstation 20**,
 or **Axil 320**. All three use sun4m and a **Sun Type 5 US keyboard**, with
 **128 MiB RAM by default**. In graphical mode, SS-5 and Axil 320 use a **TurboGX (CGsix)** SBus
 card. SS-20 can use either its native **SX/CG14** framebuffer or a **TurboGX**
@@ -124,3 +124,41 @@ reset, and a failed replacement leaves the prior machine running.
 
 See [firmware selection](firmware.md), [media](media.md), and
 [configuration and state](configuration.md) for image and NVRAM handling.
+
+
+## Ultra 5 OpenBoot console
+
+Choose **Sun Ultra 5** in **F9 → General → Machine**, set **Ultra 5
+OpenBoot flash** to the reconstructed original 1 MiB ROM, and press **F9**
+to save. **Ctrl+P** starts the guest. Click inside the framebuffer to type,
+and use **Ctrl+Enter** to release input. The graphical console runs at
+1152×900 with 512 MiB and one UltraSPARC-IIi. The Mach64 uses the onboard
+firmware driver. Its framebuffer and the Sun keyboard need no separate ROM.
+
+The Ultra 5 keeps a separate NVRAM file ending in `.ultra5`. An initialized
+configuration with `auto-boot? false` goes straight to `ok`. On the
+development machine the Helios graphical-console test profile includes a
+copy of this configuration. From the Helios repository, run
+
+```sh
+../heliacal/target/release/heliacal --config local/ultra5-graphical-console-2026-11-22/ultra5.cfg
+```
+
+The Media tab accepts a raw IDE disk on the primary master (unit 0) and a
+read-only CD-ROM on the secondary master (unit 2). `ide_disk` records the
+disk path. Select a separate writable disk for installation. Run
+`boot cdrom` at OpenBoot to start the Solaris installer. Once Solaris has
+installed and halted, detach the CD and use `boot disk`.
+
+The local Solaris 7 11/99 installation boots from its 4 GiB IDE disk to
+the Xsun/CDE **Welcome to ultra5** login screen. From the Helios checkout:
+
+```sh
+../heliacal/target/release/heliacal --config local/ultra5-solaris7-install/installed.cfg
+```
+
+Press **Ctrl+P**, click the display to capture the keyboard, and enter
+`boot disk` at `ok`. The private test account details are stored alongside
+the local configuration.
+
+On a first boot with factory defaults the ROM can select diagnostic network boot after the banner. For a repeatable firmware prompt use an initialized Ultra 5 NVRAM with `auto-boot?` set to `false`.

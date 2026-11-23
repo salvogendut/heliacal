@@ -56,6 +56,7 @@ pub enum Display {
     #[default]
     Cgsix,
     Sx,
+    Mach64,
 }
 
 impl Display {
@@ -63,6 +64,7 @@ impl Display {
         match self {
             Self::Cgsix => "TurboGX / CGsix",
             Self::Sx => "Native SX / CG14",
+            Self::Mach64 => "Onboard ATI Mach64",
         }
     }
 
@@ -70,12 +72,13 @@ impl Display {
         match self {
             Self::Cgsix => Self::Sx,
             Self::Sx => Self::Cgsix,
+            Self::Mach64 => Self::Mach64,
         }
     }
 
     pub const fn installed_video(self) -> InstalledVideo {
         match self {
-            Self::Cgsix => InstalledVideo::None,
+            Self::Cgsix | Self::Mach64 => InstalledVideo::None,
             Self::Sx => InstalledVideo::Sx,
         }
     }
@@ -88,16 +91,25 @@ pub enum Model {
     Sparcstation5,
     Sparcstation20,
     Axil320,
+    Ultra5,
 }
 
 impl Model {
-    pub const ALL: [Self; 3] = [Self::Sparcstation5, Self::Sparcstation20, Self::Axil320];
+    #[cfg(test)]
+    pub const SUN4M: [Self; 3] = [Self::Sparcstation5, Self::Sparcstation20, Self::Axil320];
+    pub const ALL: [Self; 4] = [
+        Self::Sparcstation5,
+        Self::Sparcstation20,
+        Self::Axil320,
+        Self::Ultra5,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Sparcstation5 => "Sun SPARCstation 5",
             Self::Sparcstation20 => "Sun SPARCstation 20",
             Self::Axil320 => "Axil 320",
+            Self::Ultra5 => "Sun Ultra 5",
         }
     }
 
@@ -106,11 +118,13 @@ impl Model {
             Self::Sparcstation5 => "SS-5",
             Self::Sparcstation20 => "SS-20",
             Self::Axil320 => "Axil 320",
+            Self::Ultra5 => "Ultra 5",
         }
     }
 
     pub fn processor(self) -> &'static str {
         match self {
+            Self::Ultra5 => "UltraSPARC-IIi / 440 MHz",
             Self::Sparcstation5 => "microSPARC-II / 85 MHz",
             Self::Sparcstation20 => "SuperSPARC-II / 75 MHz",
             Self::Axil320 => "SuperSPARC-II / 75 MHz",
@@ -119,6 +133,7 @@ impl Model {
 
     pub fn graphics(self, display: Display) -> &'static str {
         match (self, display) {
+            (_, Display::Mach64) => "ATI 3D Rage II+ / 4 MiB",
             (Self::Sparcstation20, Display::Sx) => "SX / CG14 / 1152 x 900",
             (Self::Sparcstation20, Display::Cgsix) => "TurboGX / CGsix / SBus slot 2",
             (_, Display::Cgsix) => "TurboGX / CGsix / 1152 x 900",
@@ -130,6 +145,7 @@ impl Model {
         match display {
             Display::Cgsix => "CGsix",
             Display::Sx => "SX/CG14",
+            Display::Mach64 => "Mach64",
         }
     }
 
@@ -138,20 +154,22 @@ impl Model {
             Self::Sparcstation5 => "Sun SS-5 PROM",
             Self::Sparcstation20 => "Sun SS-20 PROM",
             Self::Axil320 => "Axil 320 PROM",
+            Self::Ultra5 => "Ultra 5 OpenBoot flash",
         }
     }
 
-    pub fn profile(self) -> helios::machine::MachineProfile {
+    pub fn profile(self) -> Option<helios::machine::MachineProfile> {
         match self {
-            Self::Sparcstation5 => helios::machine::MachineProfile::Ss5,
-            Self::Sparcstation20 => helios::machine::MachineProfile::Ss20,
-            Self::Axil320 => helios::machine::MachineProfile::Axil320,
+            Self::Sparcstation5 => Some(helios::machine::MachineProfile::Ss5),
+            Self::Sparcstation20 => Some(helios::machine::MachineProfile::Ss20),
+            Self::Axil320 => Some(helios::machine::MachineProfile::Axil320),
+            Self::Ultra5 => None,
         }
     }
 
     #[cfg(test)]
     pub fn default_nvram(self) -> helios::devices::nvram::Nvram {
-        self.profile().default_nvram()
+        self.profile().unwrap().default_nvram()
     }
 
     pub fn supports_sx(self) -> bool {
@@ -181,6 +199,8 @@ pub struct Settings {
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ide_disk: String,
     pub scsi: [ScsiTarget; SCSI_TARGETS],
     pub disk_read_only: bool,
     pub network: bool,
@@ -208,6 +228,7 @@ impl Default for Settings {
             ram_mib: RAM_MIB,
             prom: String::new(),
             cgsix_rom: String::new(),
+            ide_disk: String::new(),
             scsi: std::array::from_fn(|id| ScsiTarget {
                 kind: match id {
                     3 => TargetKind::Disk,
@@ -265,12 +286,23 @@ impl Settings {
     }
 
     pub fn validate_hardware(&self) -> Result<(), String> {
-        if self
-            .model
-            .profile()
-            .processor_topology(usize::from(self.cpus))
-            .is_none()
-        {
+        let Some(profile) = self.model.profile() else {
+            if self.ram_mib != 512
+                || self.cpus != 1
+                || self.display != Display::Mach64
+                || self.headless
+            {
+                return Err(
+                    "Ultra 5 requires 512 MiB, one CPU and the onboard Mach64 graphical console"
+                        .into(),
+                );
+            }
+            return Ok(());
+        };
+        if self.display == Display::Mach64 {
+            return Err("Mach64 requires an Ultra 5".into());
+        }
+        if profile.processor_topology(usize::from(self.cpus)).is_none() {
             return Err(format!(
                 "{} supports {} in this release (requested {})",
                 self.model.label(),
@@ -288,8 +320,7 @@ impl Settings {
                 self.model.label()
             ));
         }
-        self.model
-            .profile()
+        profile
             .ram_layout(self.ram_bytes()?, self.installed_video())
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -312,9 +343,10 @@ impl Settings {
 
     /// Exact memory choices supported by the selected model and display.
     pub fn valid_ram_mib(&self) -> Result<Vec<u32>, String> {
-        let totals = self
-            .model
-            .profile()
+        let Some(profile) = self.model.profile() else {
+            return Ok(vec![512]);
+        };
+        let totals = profile
             .valid_ram_totals(self.installed_video())
             .map_err(|error| error.to_string())?;
         totals
@@ -342,13 +374,33 @@ impl Settings {
     fn validate_files(&self, base: &Path) -> Result<(), String> {
         let resolved = self.resolve(base);
         if !resolved.prom.is_empty() {
-            helios::firmware::FirmwareImage::resolve(Some(Path::new(&resolved.prom)), &[])?;
+            if resolved.model == Model::Ultra5 {
+                let path = Path::new(&resolved.prom);
+                if fs::metadata(path).map_err(|e| e.to_string())?.len()
+                    != helios::ultra5::FLASH_SIZE as u64
+                {
+                    return Err("Ultra 5 requires a 1 MiB OpenBoot flash".into());
+                }
+            } else {
+                helios::firmware::FirmwareImage::resolve(Some(Path::new(&resolved.prom)), &[])?;
+            }
+        }
+        if resolved.model == Model::Ultra5 && !resolved.ide_disk.is_empty() {
+            helios::media::validate_attachment(
+                &resolved.ide_disk,
+                helios::media::MediaKind::Disk,
+                !resolved.disk_read_only,
+            )
+            .map_err(|e| format!("IDE primary disk {}: {e}", resolved.ide_disk))?;
         }
         let mut images = Vec::new();
         if !resolved.headless && resolved.display == Display::Cgsix {
             images.push(("TurboGX ROM".to_string(), &resolved.cgsix_rom, 32768, 32768));
         }
         for (id, target) in resolved.scsi.iter().enumerate() {
+            if resolved.model == Model::Ultra5 && (id != 6 || target.kind != TargetKind::Cdrom) {
+                continue;
+            }
             if let Some(kind) = target.kind.media_kind()
                 && !target.path.is_empty()
             {
@@ -400,6 +452,7 @@ impl Settings {
             && self.ram_mib == other.ram_mib
             && self.prom == other.prom
             && self.cgsix_rom == other.cgsix_rom
+            && self.ide_disk == other.ide_disk
             && self.scsi == other.scsi
             && self.disk_read_only == other.disk_read_only
             && self.network == other.network
@@ -419,6 +472,7 @@ impl Settings {
         for path in [
             &mut self.prom,
             &mut self.cgsix_rom,
+            &mut self.ide_disk,
             &mut self.serial_pty_link,
         ]
         .into_iter()
@@ -606,7 +660,7 @@ mod tests {
     fn cpu_counts_default_to_one_validate_and_require_cold_replacement() {
         let old: Settings = toml::from_str("model = 'sparcstation20'").unwrap();
         assert_eq!(old.cpus, 1);
-        for model in Model::ALL {
+        for model in Model::SUN4M {
             for cpus in [0, 1, 2, 3, 4, 255] {
                 let s = Settings {
                     model,
@@ -736,7 +790,8 @@ display = "sx"
         assert_eq!(Model::default(), Model::Sparcstation5);
         assert_eq!(Model::Sparcstation5.next(), Model::Sparcstation20);
         assert_eq!(Model::Sparcstation20.next(), Model::Axil320);
-        assert_eq!(Model::Axil320.next(), Model::Sparcstation5);
+        assert_eq!(Model::Axil320.next(), Model::Ultra5);
+        assert_eq!(Model::Ultra5.next(), Model::Sparcstation5);
         let s: Settings = toml::from_str("model = 'axil320'").unwrap();
         assert_eq!(s.model, Model::Axil320);
         assert_eq!(s.display, Display::Cgsix);
@@ -754,14 +809,65 @@ display = "sx"
             .validate()
             .is_err()
         );
-        assert_eq!(s.model.profile(), helios::machine::MachineProfile::Axil320);
+        assert_eq!(
+            s.model.profile(),
+            Some(helios::machine::MachineProfile::Axil320)
+        );
         assert!(!s.model.supports_sx());
         assert!(Model::Sparcstation20.supports_sx());
         assert!(!s.hardware_eq(&Settings::default()));
     }
     #[test]
+    fn ultra5_graphical_profile_requires_one_cpu_512_mib_and_mach64() {
+        let s = Settings {
+            model: Model::Ultra5,
+            ram_mib: 512,
+            display: Display::Mach64,
+            ..Settings::default()
+        };
+        assert_eq!(s.valid_ram_mib().unwrap(), vec![512]);
+        assert!(s.validate_hardware().is_ok());
+        assert!(
+            Settings {
+                cpus: 2,
+                ..s.clone()
+            }
+            .validate_hardware()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                headless: true,
+                ..s.clone()
+            }
+            .validate_hardware()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                ram_mib: 128,
+                ..s.clone()
+            }
+            .validate_hardware()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                model: Model::Sparcstation20,
+                ..s
+            }
+            .validate_hardware()
+            .is_err()
+        );
+    }
+    #[test]
     fn unsupported_hardware_is_rejected() {
-        assert!(toml::from_str::<Settings>("model = 'ultra5'").is_err());
+        assert!(
+            toml::from_str::<Settings>("model = 'ultra5'")
+                .unwrap()
+                .validate()
+                .is_err()
+        );
         assert!(
             Settings {
                 ram_mib: 4,

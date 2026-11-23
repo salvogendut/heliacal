@@ -8,6 +8,7 @@ pub fn select(model: Model, prom: &[u8], nvram: Nvram, headless: bool) -> Result
     let expected = match model {
         Model::Sparcstation5 => (262144, 0xf438e2ee, 0x769),
         Model::Sparcstation20 => (524288, 0x105ba132, 0x769),
+        Model::Ultra5 => return Err("Ultra 5 uses its onboard keyboard and Mach64".into()),
         Model::Axil320 => (524288, 0x65290ef7, 0x781),
     };
     if prom.len() != expected.0 || crc32fast::hash(prom) != expected.1 {

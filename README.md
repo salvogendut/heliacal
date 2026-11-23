@@ -19,6 +19,12 @@ supported by each model/display. SS-20 and Axil also offer experimental
 two-CPU configurations. See [machine support and validation](docs/machines.md#supported-models)
 for RAM limits, firmware setup and the scope of the checks performed.
 
+The **Ultra 5** runs original OpenBoot 3.31 on its onboard ATI Mach64 and
+Sun Type 5 keyboard. Select it in F9 or use `--machine ultra5 --prom PATH`.
+Solaris 7 11/99 installs to a primary IDE disk and boots to the Xsun/CDE
+login on this one-CPU, 512 MiB machine.
+[Ultra 5 setup](docs/machines.md#ultra-5-openboot-console)
+
 It opens **PAUSED** with the Heliacal logo and a diskless SPARCstation 5 by
 default. Configure the machine in **F9 > General**, attach disks or CDs in
 **Media**, then press **Ctrl+P** to boot. Saved machine labels keep separate

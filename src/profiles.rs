@@ -19,6 +19,8 @@ pub struct NamedMachine {
     pub ram_mib: u32,
     pub prom: String,
     pub cgsix_rom: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ide_disk: String,
     pub scsi: [ScsiTarget; SCSI_TARGETS],
     pub disk_read_only: bool,
     pub network: bool,
@@ -44,6 +46,7 @@ impl NamedMachine {
             ram_mib: settings.ram_mib,
             prom: settings.prom.clone(),
             cgsix_rom: settings.cgsix_rom.clone(),
+            ide_disk: settings.ide_disk.clone(),
             scsi: settings.scsi.clone(),
             disk_read_only: settings.disk_read_only,
             network: settings.network,
@@ -61,6 +64,7 @@ impl NamedMachine {
         settings.ram_mib = self.ram_mib;
         settings.prom = self.prom.clone();
         settings.cgsix_rom = self.cgsix_rom.clone();
+        settings.ide_disk = self.ide_disk.clone();
         settings.scsi = self.scsi.clone();
         settings.disk_read_only = self.disk_read_only;
         settings.network = self.network;
@@ -177,7 +181,11 @@ impl Settings {
             } else {
                 self.model.graphics_short(self.display)
             },
-            if self.network { "on" } else { "off" }
+            if self.network && self.model != Model::Ultra5 {
+                "on"
+            } else {
+                "off"
+            }
         )
     }
 
@@ -199,6 +207,7 @@ impl Settings {
         match self.model {
             Model::Sparcstation5 => base,
             Model::Sparcstation20 => companion_path(&base, ".ss20"),
+            Model::Ultra5 => companion_path(&base, ".ultra5"),
             Model::Axil320 => companion_path(&base, ".axil320"),
         }
     }
