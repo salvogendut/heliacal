@@ -45,11 +45,9 @@ impl Ultra5 {
                 pressed[usize::from(code)] = down;
                 keys.pop_front();
             }
-            let repeated = self.board.repeat_countdown(&mut self.cpu, 100_000);
-            let steps = if repeated != 0 {
-                repeated
-            } else {
-                if let Err(error) = self.board.step_outcome(&mut self.cpu) {
+            let steps = match self.board.step_or_repeat(&mut self.cpu, 100_000) {
+                Ok(steps) => steps,
+                Err(error) => {
                     state.phase = Phase::Failed;
                     state.error = Some(format!(
                         "Ultra 5 stopped at PC={:#018x}: {error}",
@@ -58,11 +56,10 @@ impl Ultra5 {
                     eprintln!("{}", state.error.as_ref().unwrap());
                     break;
                 }
-                1
             };
             state.steps += steps;
             state.processor_steps[0] += steps;
-            if repeated != 0 {
+            if steps > 1 {
                 break;
             }
         }
