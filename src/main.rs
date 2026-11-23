@@ -898,7 +898,8 @@ fn run(options: Options) -> Result<()> {
     let mut count = 0;
     let mut leds = activity::Leds::default();
     let mut last_steps = 0;
-    let mut last_scsi = [(0u64, 0u64); settings::SCSI_TARGETS];
+    let mut last_generation = 0;
+    let mut last_storage = [(0u64, 0u64); settings::SCSI_TARGETS];
     let mut last_network = 0u64;
     let mut last_leds = u64::MAX;
     let mut last_phase = Phase::Ready;
@@ -1248,6 +1249,14 @@ fn run(options: Options) -> Result<()> {
             last_captured = app.captured;
             last_serial_focused = app.serial_focused;
         }
+        if state.machine_generation != last_generation {
+            last_generation = state.machine_generation;
+            last_storage.fill((0, 0));
+            last_steps = 0;
+            last_network = 0;
+            leds = activity::Leds::default();
+            redraw = true;
+        }
         let mut activity_events = 0;
         if state.phase == Phase::Running && state.steps > last_steps {
             activity_events |= activity::cpu();
@@ -1257,15 +1266,15 @@ fn run(options: Options) -> Result<()> {
             activity_events |= activity::ethernet();
         }
         last_network = state.network_activity;
-        for (id, (reads, writes)) in state.scsi_activity.iter().enumerate() {
-            let (last_reads, last_writes) = last_scsi[id];
+        for (id, (reads, writes)) in state.storage_activity.iter().enumerate() {
+            let (last_reads, last_writes) = last_storage[id];
             if *reads > last_reads {
                 activity_events |= activity::disk_read(id);
             }
             if *writes > last_writes {
                 activity_events |= activity::disk_write(id);
             }
-            last_scsi[id] = (*reads, *writes);
+            last_storage[id] = (*reads, *writes);
         }
         leds.update(activity_events, Instant::now());
         if app.quitting && state.shutdown_failed {

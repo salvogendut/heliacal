@@ -78,6 +78,8 @@ impl Ultra5 {
         shared: &Mutex<Snapshot>,
         frame: &mut FrameCache,
     ) {
+        let activity = self.board.ide_activity();
+        state.storage_activity[..activity.len()].copy_from_slice(&activity);
         state.pc = self.cpu.pc();
         state.secondary_pc = None;
         if let Some(size) = self.board.framebuffer_size() {

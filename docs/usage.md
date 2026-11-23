@@ -50,7 +50,7 @@ History is saved when you choose a file, independently of Save/Discard;
 machine settings and attachments still change only through the settings draft.
 
 Display offers smoothing, scanlines, and shortcut hints. The bottom strip shows
-RUN, CPU, and configured hard disk/CD activity; shortcut hints sit above it and
+RUN, CPU, and storage activity; shortcut hints sit above it and
 can be hidden. **Advanced** selects hard-disk read/write or read-only access.
 **General > Tinker** enables the Advanced diagnostics block with the core PC,
 step count and a recent printable serial A excerpt. **Advanced > Serial console

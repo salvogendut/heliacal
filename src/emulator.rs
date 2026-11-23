@@ -81,7 +81,9 @@ pub struct Snapshot {
     pub shutdown_failed: bool,
     /// True only after NVRAM persistence and worker/PTY cleanup, not guest halt.
     pub shutdown_complete: bool,
-    pub scsi_activity: [(u64, u64); SCSI_TARGETS],
+    pub machine_generation: u64,
+    pub storage_lamps: [Option<crate::activity::StorageLamp>; SCSI_TARGETS],
+    pub storage_activity: [(u64, u64); SCSI_TARGETS],
     pub network_activity: u64,
 }
 
@@ -114,7 +116,9 @@ impl Default for Snapshot {
             waiting_for_console: false,
             shutdown_failed: false,
             shutdown_complete: false,
-            scsi_activity: [(0, 0); SCSI_TARGETS],
+            machine_generation: 0,
+            storage_lamps: [None; SCSI_TARGETS],
+            storage_activity: [(0, 0); SCSI_TARGETS],
             network_activity: 0,
         }
     }
@@ -549,7 +553,7 @@ fn publish(
     }
     state.pc = u64::from(machine.cpu.pc());
     state.secondary_pc = machine.secondary_cpu().map(|module| module.cpu.pc());
-    state.scsi_activity = std::array::from_fn(|id| {
+    state.storage_activity = std::array::from_fn(|id| {
         machine
             .bus
             .devices()
@@ -1227,7 +1231,9 @@ fn run(
                             state.processor_steps = [0; 2];
                             state.network_activity = 0;
                             state.video_size = (WIDTH, HEIGHT);
-                            state.scsi_activity = [(0, 0); SCSI_TARGETS];
+                            state.machine_generation = state.machine_generation.wrapping_add(1);
+                            state.storage_lamps = crate::activity::storage_lamps(&settings);
+                            state.storage_activity = [(0, 0); SCSI_TARGETS];
                             state.serial.clear();
                             state.error = None;
                             state.pixels = Arc::new(vec![0; WIDTH * HEIGHT * 4]);

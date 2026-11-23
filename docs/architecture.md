@@ -11,7 +11,7 @@ or substitute a synthetic boot display.
 `src/main.rs` owns the SDL event/render loop, host shortcuts, file-picker
 completion, confirmations, and application lifetime. `view.rs` draws the guest
 texture, paused screen, F9 overlay, notifications, status hints, and RUN/CPU/
-SCSI activity LEDs. SDL's built-in debug font supplies the compact Happy Years
+SCSI and IDE activity LEDs. SDL's built-in debug font supplies the compact Happy Years
 text. `overlay.rs` holds the editable settings draft independently from live
 preferences; F9 saves it, and closing a dirty draft prompts Save/Discard/Cancel.
 

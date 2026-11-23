@@ -650,49 +650,36 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
         Color::RGB(18, 18, 18),
     )?;
     fill(c, Rect::new(0, y, WIDTH, 1), Color::RGB(50, 50, 50))?;
+    const CAPTURE_HINT: &str = "CAPTURED / Ctrl+Enter";
     if p.captured {
-        text(
-            c,
-            8,
-            y + 7,
-            "CAPTURED / Ctrl+Enter",
-            Color::RGB(255, 96, 80),
-        )?;
+        text(c, 8, y + 7, CAPTURE_HINT, Color::RGB(255, 96, 80))?;
     }
     let mut lamps = vec![
-        (
-            "RUN".to_owned(),
-            p.state.phase == Phase::Running,
-            false,
-            RUN_LED,
-        ),
-        (
-            "CPU".to_owned(),
-            p.leds & activity::cpu() != 0,
-            false,
-            CPU_LED,
-        ),
+        ("RUN", p.state.phase == Phase::Running, false, RUN_LED),
+        ("CPU", p.leds & activity::cpu() != 0, false, CPU_LED),
     ];
     if p.settings.network && p.settings.model != crate::settings::Model::Ultra5 {
-        lamps.push((
-            "NET".to_owned(),
-            p.leds & activity::ethernet() != 0,
-            false,
-            NET_LED,
-        ));
+        lamps.push(("NET", p.leds & activity::ethernet() != 0, false, NET_LED));
     }
-    for (id, target) in p.settings.scsi.iter().enumerate() {
-        let Some(kind) = target.kind.media_kind() else {
-            continue;
-        };
-        let disk = kind == helios::devices::scsi::MediaKind::Disk;
+    let drives = if p.state.has_machine {
+        p.state.storage_lamps
+    } else {
+        activity::storage_lamps(p.settings)
+    };
+    for (id, drive) in drives.iter().enumerate() {
+        let Some(drive) = drive else { continue };
         let read = activity::disk_read(id);
         let write = activity::disk_write(id);
+        let palette = match drive.media {
+            Some(helios::media::MediaKind::Disk) => DISK_LED,
+            Some(helios::media::MediaKind::Cdrom) => CD_LED,
+            None => CPU_LED, // empty IDE socket
+        };
         lamps.push((
-            format!("{}{id}", if disk { "HD" } else { "CD" }),
+            drive.label,
             p.leds & (read | write) != 0,
             p.leds & write != 0,
-            if disk { DISK_LED } else { CD_LED },
+            palette,
         ));
     }
     let width: i32 = lamps
@@ -701,6 +688,9 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
         .sum::<i32>()
         + (lamps.len() as i32 - 1) * 8;
     let mut x = (WIDTH as i32 - width) / 2;
+    if p.captured {
+        x = x.max(16 + CAPTURE_HINT.len() as i32 * 8);
+    }
     let lamp_y = y + (LED_HEIGHT as i32 - 10) / 2;
     for (label, lit, write, palette) in lamps {
         let color = if !lit {
@@ -714,7 +704,7 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
         fill(c, rect, color)?;
         c.set_draw_color(Color::RGB(0, 0, 0));
         c.draw_rect(rect)?;
-        text(c, x + 20, lamp_y + 1, &label, Color::RGB(205, 205, 205))?;
+        text(c, x + 20, lamp_y + 1, label, Color::RGB(205, 205, 205))?;
         x += 20 + label.len() as i32 * 8 + 8;
     }
     Ok(())
