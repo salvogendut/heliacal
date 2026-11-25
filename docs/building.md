@@ -60,7 +60,7 @@ and known images are rejected at setup. SS-20 with `--display sx` and headless
 guests do not need a TurboGX ROM.
 
 `make` builds the current sources against `../helios`; it does not fetch or
-update the core. Heliacal enables Helios's `chd` and `host-icmp` features.
+update the core. Heliacal enables Helios's `chd`, `host-icmp` and `host-tcp` features.
 Linux is the validated host; Unix PTYs are required for headless guests.
 See [firmware selection](firmware.md) before the first boot and
 [testing](testing.md) for the available checks.

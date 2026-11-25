@@ -10,7 +10,7 @@ default = []
 parking-profile = ["helios/parking-profile"]
 
 [dependencies]
-helios = { path = "../helios", features = ["chd", "host-icmp"] }
+helios = { path = "../helios", features = ["chd", "host-icmp", "host-tcp"] }
 sdl3 = "0.20"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

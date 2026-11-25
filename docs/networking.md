@@ -20,8 +20,9 @@ cross the NAT. On Linux, external IPv4 ping (including `www.google.com`) uses
 unprivileged host ICMP sockets. Gateway ping works without them. If external
 ping is unavailable, the app logs the host error; see
 [Helios networking](https://github.com/salvogendut/helios/blob/main/docs/networking.md) for Linux ping-group policy,
-packet-size limits and diagnostics. TCP NAT, IPv6 and traceroute remain
-unimplemented.
+packet-size limits and diagnostics. All four machine models can initiate IPv4 TCP
+connections through this same NAT, including HTTP downloads from a reachable
+server. Incoming port forwarding, IPv6 and traceroute remain unsupported.
 
 
 ## Storage activity
