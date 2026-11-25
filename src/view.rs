@@ -658,7 +658,7 @@ fn draw_leds(c: &mut WindowCanvas, p: &Presentation<'_>) -> Result<(), sdl3::Err
         ("RUN", p.state.phase == Phase::Running, false, RUN_LED),
         ("CPU", p.leds & activity::cpu() != 0, false, CPU_LED),
     ];
-    if p.settings.network && p.settings.model != crate::settings::Model::Ultra5 {
+    if p.settings.network {
         lamps.push(("NET", p.leds & activity::ethernet() != 0, false, NET_LED));
     }
     let drives = if p.state.has_machine {

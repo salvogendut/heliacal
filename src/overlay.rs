@@ -274,9 +274,6 @@ impl Overlay {
                 Field::NewDisk,
             )))
             .collect(),
-            Tab::Network if self.draft.model == crate::settings::Model::Ultra5 => {
-                vec![("Ethernet", "Firmware probe only".into(), Field::Fixed)]
-            }
             Tab::Advanced if self.draft.model == crate::settings::Model::Ultra5 => vec![
                 (
                     "Disk access",
@@ -305,7 +302,16 @@ impl Overlay {
                     Field::Fixed,
                 ),
                 ("NAT gateway", "192.168.0.1".into(), Field::Fixed),
-                ("Guest setup", "DHCP or static le0".into(), Field::Fixed),
+                (
+                    "Guest setup",
+                    if self.draft.model == crate::settings::Model::Ultra5 {
+                        "DHCP or static hme0"
+                    } else {
+                        "DHCP or static le0"
+                    }
+                    .into(),
+                    Field::Fixed,
+                ),
             ],
             Tab::Advanced => {
                 let mut rows = vec![(
@@ -882,16 +888,29 @@ mod tests {
     }
     #[test]
     fn network_tab_toggles_the_draft_and_requires_a_cold_reset() {
-        let settings = Settings::default();
-        let mut o = Overlay::new(&settings);
-        o.tab = Tab::Network;
-        o.selected = 0;
-        assert_eq!(o.field(), Field::Network);
-        assert!(o.draft.network);
-        o.activate();
-        assert!(!o.draft.network);
-        assert!(o.dirty(&settings));
-        assert!(!settings.hardware_eq(&o.draft));
+        for (model, interface) in [
+            (crate::settings::Model::Sparcstation5, "le0"),
+            (crate::settings::Model::Ultra5, "hme0"),
+        ] {
+            let settings = Settings {
+                model,
+                ..Settings::default()
+            };
+            let mut o = Overlay::new(&settings);
+            o.tab = Tab::Network;
+            o.selected = 0;
+            assert_eq!(o.field(), Field::Network);
+            assert!(o.draft.network);
+            assert!(
+                o.rows()
+                    .iter()
+                    .any(|r| r.label == "Guest setup" && r.value.ends_with(interface))
+            );
+            o.activate();
+            assert!(!o.draft.network);
+            assert!(o.dirty(&settings));
+            assert!(!settings.hardware_eq(&o.draft));
+        }
     }
 
     #[test]

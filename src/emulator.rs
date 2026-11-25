@@ -452,12 +452,43 @@ fn build_at_with_firmware(
     Ok(machine)
 }
 
-fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: Instant) -> u64 {
+trait FramePort {
+    fn take_frame(&mut self) -> Option<Vec<u8>>;
+    fn receive_frame(&mut self, frame: &[u8]) -> bool;
+}
+
+impl FramePort for Machine {
+    fn take_frame(&mut self) -> Option<Vec<u8>> {
+        self.bus.devices_mut().unwrap().ethernet.take_frame()
+    }
+    fn receive_frame(&mut self, frame: &[u8]) -> bool {
+        self.bus
+            .devices_mut()
+            .unwrap()
+            .ethernet
+            .receive_frame(frame)
+    }
+}
+
+impl FramePort for helios::ultra5::Ultra5ResetBoard {
+    fn take_frame(&mut self) -> Option<Vec<u8>> {
+        self.take_ethernet_frame()
+    }
+    fn receive_frame(&mut self, frame: &[u8]) -> bool {
+        self.receive_ethernet_frame(frame)
+    }
+}
+
+fn service_network(
+    machine: &mut impl FramePort,
+    network: &mut Option<NatEngine>,
+    now: Instant,
+) -> u64 {
     let Some(network) = network.as_mut() else {
         return 0;
     };
     loop {
-        let frame = machine.bus.devices_mut().unwrap().ethernet.take_frame();
+        let frame = machine.take_frame();
         let Some(frame) = frame else {
             break;
         };
@@ -468,13 +499,7 @@ fn service_network(machine: &mut Machine, network: &mut Option<NatEngine>, now: 
         eprintln!("Host NAT: {warning}");
     }
     while let Some(frame) = network.output() {
-        if !machine
-            .bus
-            .devices_mut()
-            .unwrap()
-            .ethernet
-            .receive_frame(&frame)
-        {
+        if !machine.receive_frame(&frame) {
             break;
         }
     }
@@ -1220,7 +1245,8 @@ fn run(
                             }
                             machine = Some(new);
                             nvram_path = target_path;
-                            network = (settings.network && settings.model != Model::Ultra5)
+                            network = settings
+                                .network
                                 .then(|| NatEngine::new(NatConfig::default()));
                             state.phase = Phase::Running;
                             idle_parking = settings.idle_parking;
@@ -1326,8 +1352,9 @@ fn run(
             }
         }
         let m = match m {
-            Guest::Sun4m(m) => m,
+            Guest::Sun4m(m) => m.as_mut(),
             Guest::Ultra5(m) => {
+                state.network_activity = m.service_network(&mut network, Instant::now());
                 for event in pending_mouse.drain(..) {
                     m.mouse_event(event);
                 }

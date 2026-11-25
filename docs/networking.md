@@ -2,17 +2,19 @@
 
 [Back to Heliacal](../README.md) · [All guides](../README.md#documentation)
 
-Host networking is available as user-mode NAT: enable it in F9 > Network, then
-configure Solaris `le0` with DHCP or a static address on the 192.168.0.0/24
-network (gateway 192.168.0.1), for example:
+Enable **F9 → Network → Host networking**, save, and start or cold-reset
+the machine. Solaris uses `hme0` on the Ultra 5 and `le0` on the
+SPARCstation 5, SPARCstation 20 and Axil 320. For example, on an Ultra 5
+with a fresh interface, run as root:
 
 ```sh
-ifconfig le0 plumb 192.168.0.2 netmask 255.255.255.0 up
-route add default 192.168.0.1
+ifconfig hme0 plumb
+ifconfig hme0 192.168.0.2 netmask 255.255.255.0 up
+ping -s -n 192.168.0.1 56 3
 ```
 
-The OS already detects `le0`; guest network configuration turns the interface
-up. The status strip shows
+Skip `plumb` for an existing interface. For off-subnet traffic,
+`route add default 192.168.0.1` adds a default route. The status strip shows
 RUN, CPU, NET and attached-media activity lamps; NET pulses as Ethernet frames
 cross the NAT. On Linux, external IPv4 ping (including `www.google.com`) uses
 unprivileged host ICMP sockets. Gateway ping works without them. If external

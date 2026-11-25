@@ -11,6 +11,7 @@ impl Ultra5 {
     pub(super) fn new(settings: &Settings, flash: Vec<u8>, nvram: Vec<u8>) -> Result<Self, String> {
         let mut board = Ultra5ResetBoard::new(BootFlash::new(flash)?, ResetNvram::new(nvram)?);
         board.attach_keyboard();
+        board.set_ethernet_link(settings.network);
         if !settings.ide_disk.is_empty() {
             board
                 .attach_disk(&settings.ide_disk, !settings.disk_read_only)
@@ -24,6 +25,10 @@ impl Ultra5 {
             board,
             cpu: V9Cpu::from(PowerOnReset::ultra_sparc_ii()),
         })
+    }
+
+    pub(super) fn service_network(&mut self, network: &mut Option<NatEngine>, now: Instant) -> u64 {
+        super::service_network(&mut self.board, network, now)
     }
 
     pub(super) fn mouse_event(&mut self, event: MouseEvent) {

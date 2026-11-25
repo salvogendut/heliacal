@@ -181,11 +181,7 @@ impl Settings {
             } else {
                 self.model.graphics_short(self.display)
             },
-            if self.network && self.model != Model::Ultra5 {
-                "on"
-            } else {
-                "off"
-            }
+            if self.network { "on" } else { "off" }
         )
     }
 
